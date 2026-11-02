@@ -1161,7 +1161,8 @@
     if (m !== 'terrain' && sel?.type === 'landmark') sel = null;
     mode = m;
     document.body.classList.toggle('terrain-on', m === 'terrain');
-    $('#btnTerrain').classList.toggle('on', m === 'terrain');
+    $('#logoTerrain').classList.toggle('on', m === 'terrain');
+    $('#logoRoute').classList.toggle('on', m !== 'terrain');
     renderTerrainControls();
     document.querySelectorAll('.tools [data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
     svg.setAttribute('class', `mode-${m}`);
@@ -2028,7 +2029,8 @@
 
   // ---------- ツールバー ----------
   document.querySelectorAll('.tools [data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-  $('#btnTerrain').addEventListener('click', () => setMode(mode === 'terrain' ? modeBeforeTerrain : 'terrain'));
+  $('#logoTerrain').addEventListener('click', () => { if (mode !== 'terrain') { setMode('terrain'); toast('地形エディター'); } });
+  $('#logoRoute').addEventListener('click', () => { if (mode === 'terrain') { setMode(modeBeforeTerrain === 'terrain' ? 'select' : modeBeforeTerrain); toast('路線図エディター'); } });
   $('#btnTerrainDone').addEventListener('click', () => setMode(modeBeforeTerrain === 'terrain' ? 'select' : modeBeforeTerrain));
   document.querySelectorAll('[data-ttool]').forEach((b) => b.addEventListener('click', () => {
     terrainTool = b.dataset.ttool;

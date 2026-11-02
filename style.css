@@ -79,6 +79,16 @@ kbd { font-family: ui-monospace, monospace; font-size: 11px; border: 1px solid v
   border-bottom: 1px solid var(--border);
 }
 .brand { grid-area: brand; display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+.logo-btn {
+  width: 42px; height: 42px; padding: 0; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #fff; border: 2px solid #fff; border-radius: 11px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
+  opacity: .55; transition: opacity .15s, box-shadow .15s;
+}
+.logo-btn:hover { border-color: #fff; opacity: .85; }
+.logo-btn.on { opacity: 1; box-shadow: 0 0 0 3px var(--accent); }
+body.terrain-on .logo-btn.on { box-shadow: 0 0 0 3px #0b8fd6; }
 .file-actions { grid-area: file; }
 .export { grid-area: export; display: flex; gap: 4px; }
 .tools { grid-area: tools; display: flex; gap: 4px; background: var(--surface-2); padding: 3px; border-radius: 8px; }
@@ -272,7 +282,7 @@ select { cursor: pointer; }
   .layout { flex-direction: column; }
   .stage { flex: none; height: 62vh; }
   .sidebar { width: 100%; border-left: none; border-top: 1px solid var(--border); overflow: visible; }
-  .brand span { display: none; }
+  .brand .brand-name { display: none; }
   .tools button span:not(.ico) { font-size: 12px; }
   .name-editor input { font-size: 16px; }
   .overlay.title { font-size: 15px; }

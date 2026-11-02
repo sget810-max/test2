@@ -10,16 +10,25 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
-        <path d="M4 22 H14 L24 12 H30" stroke="#e60012" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M10 4 V14 L20 24 V30" stroke="#0079c2" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="15.5" cy="20.5" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
-      </svg>
-      <span>路線図メーカー</span>
+      <button id="logoRoute" class="logo-btn" title="路線図エディタ" aria-label="路線図エディタ">
+        <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+          <path d="M3 21 H13 L23 11 H29" stroke="#e60012" stroke-width="3.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9 3 V13 L19 23 V29" stroke="#0079c2" stroke-width="3.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="14.6" cy="19.6" r="3.8" fill="#fff" stroke="#222" stroke-width="2"/>
+        </svg>
+      </button>
+      <button id="logoTerrain" class="logo-btn" title="地形エディタ" aria-label="地形エディタ">
+        <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+          <path d="M2 22 Q9 19 13 24 T22 30 H2 Z" fill="#a9d4f2"/>
+          <path d="M27 3 C21 6 25 10 19 13 S17 19 13 22" stroke="#2f8fe0" stroke-width="3.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3 12 L8 5 L13 12 Z" fill="#6cbb5a"/>
+          <path d="M8 12 L12 7 L16 12 Z" fill="#4a9a3c"/>
+        </svg>
+      </button>
+      <span class="brand-name">路線図メーカー</span>
     </div>
 
     <div class="file-actions hscroll" aria-label="ファイル">
-      <button id="btnTerrain" class="terrain-toggle" title="地形エディター (T)">⛰ 地形</button>
       <button id="btnNew" title="新しい路線図">新規</button>
       <button id="btnSample" title="サンプルを読み込む">サンプル</button>
       <button id="btnOpen" title="JSONファイルを開く">開く</button>
@@ -175,7 +184,7 @@
           <li><b>経路を曲げる</b>: 選択ツールで路線をドラッグすると経由点（□）ができ、経路を自由に変えられます。□はドラッグで移動、ダブルタップで削除。区間を選ぶと「折れ線／直線／曲線」も選べます。</li>
           <li><b>ターミナル駅</b>: 駅を選んで「🚉 ターミナル」を押すと、大きな四角形の駅になります。幅・高さはマス単位で調整できます。</li>
                     <li><b>範囲選択</b>: 背景をドラッグ（スマホは<b>範囲</b>ツール）で複数の駅を選択。<kbd>Shift</kbd>+クリックで追加・解除。まとめて移動・整列・削除・路線化ができます。</li>
-          <li><b>⛰ 地形</b>ボタンで地形エディターに切り替え。地形はすべてグリッドのマス目単位です。<b>水域</b>でマスをタップ・なぞって海・川・湖にし、<b>陸地</b>でマスを陸に戻します。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
+          <li>左上の<b>地形ロゴ</b>（青い川の絵）で地形エディターに、<b>路線図ロゴ</b>で路線図エディターに切り替え。地形はすべてグリッドのマス目単位です。<b>水域</b>でマスをタップ・なぞって海・川・湖にし、<b>陸地</b>でマスを陸に戻します。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
           <li>ホイールまたは2本指で拡大縮小。右ドラッグ・<kbd>Space</kbd>+ドラッグ・タッチ操作で画面移動。</li>
         </ol>
         <p class="muted">ショートカット: V 選択 / R 範囲 / T 地形 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>

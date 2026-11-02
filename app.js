@@ -11,6 +11,20 @@
   const GRID_ORDER = [7, 0, 1, 6, -1, 2, 5, 4, 3]; // 3x3グリッドの並び(-1=自動)
   const FONT = '"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP","Yu Gothic",Meiryo,sans-serif';
   const DOUBLE_TAP_MS = 350;
+  const LANDMARKS = [
+    ['temple', '卍', '寺院'], ['shrine', '⛩️', '神社'], ['tower', '🗼', 'タワー'], ['castle', '🏯', '城'],
+    ['mountain', '⛰️', '山'], ['park', '🌳', '公園'], ['school', '🏫', '学校'], ['hospital', '🏥', '病院'],
+    ['airport', '✈️', '空港'], ['port', '⚓', '港'], ['stadium', '🏟️', '競技場'], ['building', '🏢', 'ビル'],
+    ['amusement', '🎡', '遊園地'], ['onsen', '♨️', '温泉'], ['star', '⭐', 'その他'],
+  ];
+  const LM = Object.fromEntries(LANDMARKS.map(([id, g, n]) => [id, { g, n }]));
+  const TERRAIN_HINTS = {
+    'water-brush': '指（マウス）でなぞって水域を塗る ／ 2本指・右ドラッグで画面移動',
+    'water-fill': '囲むように描くと、内側を水域で塗りつぶします',
+    'land-brush': 'なぞった所を陸地に戻す（海岸線や川岸の調整に）',
+    'land-fill': '囲むように描くと、内側を陸地に戻します',
+    landmark: 'タップでランドマークを配置 ／ ドラッグで移動 ／ ダブルタップで名前を編集',
+  };
   const HINTS = {
     select: 'ダブルクリック（タップ）で駅を追加 ／ 駅をドラッグで移動（他の駅に重ねると乗換駅に統合）／ 背景ドラッグで範囲選択',
     range: 'ドラッグで範囲選択（Shiftで追加）／ 駅をタップで選択に追加・解除 ／ 選んだ駅はまとめて移動できます',
@@ -31,6 +45,7 @@
   const inspector = $('#inspector');
   const lineList = $('#lineList');
   const nameEditor = $('#nameEditor');
+  const terrainVp = $('#terrainVp'), gTerrain = $('#gTerrain'), gTerrainPreview = $('#gTerrainPreview'), gLandmarks = $('#gLandmarks');
 
   // ---------- 状態 ----------
   let state;
@@ -48,6 +63,11 @@
   let lastTap = null;
   let nameEdit = null;
   const pointers = new Map();
+  let terrainTool = 'water';
+  let paintStyle = 'brush';
+  let brushSize = 40;
+  let lmIcon = 'temple';
+  let modeBeforeTerrain = 'select';
 
   // ---------- ユーティリティ ----------
   const uid = (p) => p + Math.random().toString(36).slice(2, 9);
@@ -89,11 +109,11 @@
 
   // ---------- データ ----------
   function defaultSettings() {
-    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true, stationScale: 1 };
+    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true, stationScale: 1, waterColor: '#a9d4f2' };
   }
 
   function emptyState() {
-    return { version: 1, stations: {}, lines: [], bends: {}, settings: defaultSettings() };
+    return { version: 1, stations: {}, lines: [], bends: {}, terrain: { shapes: [], landmarks: [] }, settings: defaultSettings() };
   }
 
   function sampleState() {
@@ -120,6 +140,16 @@
         stations: ['kitaguchi', 'daigaku', 'higashimachi', 'minamimachi', 'hamabe', 'minatomachi'] },
       { id: 'L4', name: '臨海線', code: 'D', color: '#f39800', width: 6, loop: false,
         stations: ['minatomachi', 'chuo', 'higashimachi', 'minamihama'] },
+    ];
+    s.terrain.shapes = [
+      { t: 'water', f: true, w: 0, p: [-700, 40, -460, 40, -330, 120, -280, 300, -120, 380, 140, 400, 320, 440, 480, 560, -700, 560] },
+      { t: 'water', f: false, w: 26, p: [520, -420, 400, -330, 300, -260, 270, -140, 290, 20, 250, 200, 230, 330, 260, 440] },
+    ];
+    s.terrain.landmarks = [
+      { id: 'lm1', x: -180, y: -180, icon: 'temple', name: '古寺' },
+      { id: 'lm2', x: 90, y: -90, icon: 'tower', name: '架空タワー' },
+      { id: 'lm3', x: -100, y: 110, icon: 'park', name: '中央公園' },
+      { id: 'lm4', x: -470, y: 110, icon: 'port', name: '西港ふ頭' },
     ];
     return s;
   }
@@ -152,6 +182,14 @@
     Object.assign(s.settings, raw.settings || {});
     s.settings.fontSize = clamp(Number(s.settings.fontSize) || 14, 8, 40);
     s.settings.stationScale = clamp(Number(s.settings.stationScale) || 1, 0.5, 2);
+    if (!/^#[0-9a-f]{6}$/i.test(s.settings.waterColor)) s.settings.waterColor = defaultSettings().waterColor;
+    const T = raw.terrain || {};
+    s.terrain.shapes = (Array.isArray(T.shapes) ? T.shapes : [])
+      .filter((sh) => sh && (sh.t === 'water' || sh.t === 'land') && Array.isArray(sh.p) && sh.p.length >= 2 && sh.p.length % 2 === 0 && sh.p.every(Number.isFinite))
+      .map((sh) => ({ t: sh.t, f: !!sh.f, w: clamp(Number(sh.w) || 0, 0, 400), p: sh.p.slice() }));
+    s.terrain.landmarks = (Array.isArray(T.landmarks) ? T.landmarks : [])
+      .filter((l) => l && Number.isFinite(l.x) && Number.isFinite(l.y))
+      .map((l) => ({ id: String(l.id || uid('m')), x: l.x, y: l.y, icon: LM[l.icon] ? l.icon : 'star', name: String(l.name ?? '') }));
     return s;
   }
 
@@ -206,6 +244,7 @@
       if (!sel.ids.length) sel = null;
     }
     if (sel?.type === 'line' && !lineById(sel.id)) sel = null;
+    if (sel?.type === 'landmark' && !landmarkById(sel.id)) sel = null;
     if (activeLineId && !lineById(activeLineId)) activeLineId = null;
   }
 
@@ -228,6 +267,7 @@
   // ---------- 操作 ----------
   const lineById = (id) => state.lines.find((l) => l.id === id);
   const activeLine = () => lineById(activeLineId);
+  const landmarkById = (id) => state.terrain.landmarks.find((l) => l.id === id);
 
   function stationNear(x, y, excludeId) {
     let best = null, bd = 6;
@@ -555,8 +595,56 @@
     gridPat.querySelector('path').setAttribute('d', `M${g} 0H0V${g}`);
   }
 
+  function smoothPath(pts, closed) {
+    if (!pts.length) return '';
+    const f = (p) => `${r1(p[0])},${r1(p[1])}`;
+    if (pts.length < 3) return `M${f(pts[0])} L${f(pts[pts.length - 1])}${closed ? 'Z' : ''}`;
+    let d = `M${f(pts[0])}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const m = [(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2];
+      d += ` Q${f(pts[i])} ${f(m)}`;
+    }
+    d += ` L${f(pts[pts.length - 1])}`;
+    return closed ? d + 'Z' : d;
+  }
+  const unflat = (p) => { const o = []; for (let i = 0; i < p.length; i += 2) o.push([p[i], p[i + 1]]); return o; };
+
+  function shapeMarkup(sh, preview) {
+    const col = sh.t === 'water' ? state.settings.waterColor : state.settings.bg;
+    const pts = unflat(sh.p);
+    if (sh.f) {
+      if (preview) return `<path d="${smoothPath(pts, true)}" fill="${esc(col)}" fill-opacity="0.6" stroke="#0b8fd6" stroke-width="${r1(2 / view.k)}" stroke-dasharray="${r1(6 / view.k)} ${r1(4 / view.k)}"/>`;
+      return `<path d="${smoothPath(pts, true)}" fill="${esc(col)}" stroke="${esc(col)}" stroke-width="2" stroke-linejoin="round"/>`;
+    }
+    return `<path d="${smoothPath(pts, false)}" fill="none" stroke="${esc(col)}" stroke-width="${sh.w}" stroke-linecap="round" stroke-linejoin="round"${preview ? ' stroke-opacity="0.75"' : ''}/>`;
+  }
+
+  function renderTerrain() {
+    gTerrain.innerHTML = state.terrain.shapes.map((sh) => shapeMarkup(sh)).join('');
+    renderTerrainPreview();
+  }
+  function renderTerrainPreview() {
+    gTerrainPreview.innerHTML = drag?.type === 'paint'
+      ? shapeMarkup({ t: drag.kind, f: drag.fill, w: drag.w, p: drag.pts.flat() }, true) : '';
+  }
+
+  function landmarkMarkup(l) {
+    const k = state.settings.stationScale || 1;
+    const r = 14 * k, fs = state.settings.fontSize;
+    const glyph = LM[l.icon]?.g || '⭐';
+    let t = `<g data-landmark="${esc(l.id)}" transform="translate(${r1(l.x)} ${r1(l.y)})">`
+      + `<circle r="${r1(r + 6)}" fill="transparent"/>`
+      + `<circle r="${r1(r)}" fill="#fff" stroke="#8a8f99" stroke-width="1.5"/>`
+      + `<text y="${r1(r * 0.05)}" font-size="${r1(r * 1.15)}" text-anchor="middle" dominant-baseline="central">${esc(glyph)}</text>`;
+    if (l.name) t += `<text y="${r1(r + fs * 0.85 + 3)}" font-size="${r1(fs * 0.8)}" text-anchor="middle" fill="#5b6472" stroke="${esc(state.settings.bg)}" stroke-width="3" stroke-linejoin="round" paint-order="stroke">${esc(l.name)}</text>`;
+    return t + '</g>';
+  }
+
   function renderMap() {
     geom = computeGeom();
+    renderTerrain();
+    gLandmarks.innerHTML = state.terrain.landmarks.map(landmarkMarkup).join('');
+    gLandmarks.setAttribute('font-family', FONT);
     const S = state.settings;
     bgRect.setAttribute('fill', S.bg);
     gridRect.style.display = S.grid ? '' : 'none';
@@ -602,6 +690,9 @@
         const part = g.parts.find((p) => p.key === sel.seg);
         if (part) over += `<path d="${roundedPath(part.pts, 14)}" fill="none" stroke="#1f6feb" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"/>`;
       }
+    } else if (sel?.type === 'landmark') {
+      const l = landmarkById(sel.id);
+      if (l) over += `<circle cx="${r1(l.x)}" cy="${r1(l.y)}" r="${r1(14 * (state.settings.stationScale || 1) + 7)}" fill="#1f6feb" fill-opacity="0.25" pointer-events="none"/>`;
     } else {
       for (const id of selIds()) {
         const { p1, p2, R } = stationShape(state.stations[id]);
@@ -628,6 +719,7 @@
 
   function applyView() {
     vp.setAttribute('transform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
+    terrainVp.setAttribute('transform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     gridPat.setAttribute('patternTransform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     if (nameEdit) positionNameEditor();
   }
@@ -642,6 +734,7 @@
     const ln = activeLine();
     const n = selIds().length;
     let hint = mode === 'line' ? (ln ? `【${ln.name}】 ` : '【新しい路線】 ') + HINTS.line : HINTS[mode];
+    if (mode === 'terrain') hint = '【地形】' + TERRAIN_HINTS[terrainTool === 'landmark' ? 'landmark' : `${terrainTool}-${paintStyle}`];
     if (n > 1 && (mode === 'select' || mode === 'range')) hint = `${n}駅を選択中 ／ ドラッグでまとめて移動・矢印キーで微調整・Deleteで削除`;
     $('#hint').textContent = hint;
   }
@@ -674,6 +767,8 @@
     if (ids.length === 1) return renderStationInspector(state.stations[ids[0]]);
     if (ids.length > 1) return renderMultiInspector(ids);
     if (sel?.type === 'line' && lineById(sel.id)) return renderLineInspector(lineById(sel.id));
+    if (sel?.type === 'landmark' && landmarkById(sel.id)) return renderLandmarkInspector(landmarkById(sel.id));
+    if (mode === 'terrain') return renderTerrainInspector();
     inspector.innerHTML = '<h2>選択中</h2><p class="muted">駅や路線をクリックすると、ここで名前や色などを編集できます。背景をドラッグ（スマホは「範囲」ツール）すると複数の駅をまとめて選択できます。</p>';
   }
 
@@ -713,6 +808,40 @@
       </div>
       <div class="btn-row"><button class="danger" data-act="delete-stations">この駅を削除</button></div>
       <p class="muted">駅をドラッグして別の駅に重ねると、1つの乗換駅に統合されます。矢印キーで位置を微調整できます。</p>`;
+  }
+
+  function lmGrid(cur) {
+    return `<div class="lm-grid">${LANDMARKS.map(([id, g, n]) => `<button data-act="lm-icon" data-icon="${id}" class="${id === cur ? 'on' : ''}" title="${n}">${g}<small>${n}</small></button>`).join('')}</div>`;
+  }
+
+  function renderLandmarkInspector(l) {
+    inspector.innerHTML = `
+      <h2>ランドマーク</h2>
+      <label class="field">名前 <input type="text" data-field="lmname" value="${esc(l.name)}" maxlength="40" placeholder="例: 架空タワー"></label>
+      <div class="field">種類 ${lmGrid(l.icon)}</div>
+      <div class="btn-row"><button class="danger" data-act="lm-delete">このランドマークを削除</button></div>
+      <p class="muted">地形モードでドラッグすると移動、ダブルタップで名前を編集できます。</p>`;
+  }
+
+  function renderTerrainInspector() {
+    const n = state.terrain.shapes.length, m = state.terrain.landmarks.length;
+    inspector.innerHTML = `
+      <h2>地形エディター</h2>
+      <p class="muted">
+        <b>🌊 水域</b>: 海・川・湖を塗ります。「ブラシ」はなぞった所を、「囲んで塗る」は囲んだ内側を塗ります。<br>
+        <b>🟩 陸地</b>: 水域を消して陸地に戻します。海岸線や川岸の形を整えるのに使います。<br>
+        <b>📍 ランドマーク</b>: 種類を選んでタップで配置。ドラッグで移動、ダブルタップで名前を編集。<br>
+        描いている間は2本指（パソコンは右ドラッグ／Space+ドラッグ）で画面を動かせます。
+      </p>
+      <div class="row">
+        <label class="field">水の色 <input type="color" data-field="water" value="${esc(state.settings.waterColor)}"></label>
+        <label class="field">陸地の色 <input type="color" data-field="land" value="${esc(state.settings.bg)}"></label>
+      </div>
+      <p class="muted">塗り: ${n}件 ／ ランドマーク: ${m}件</p>
+      <div class="btn-row">
+        <button class="danger small" data-act="terrain-clear-shapes" ${n ? '' : 'disabled'}>水域・陸地をすべて消す</button>
+        <button class="danger small" data-act="terrain-clear-landmarks" ${m ? '' : 'disabled'}>ランドマークをすべて消す</button>
+      </div>`;
   }
 
   function renderMultiInspector(ids) {
@@ -793,6 +922,7 @@
     const S = state.settings;
     $('#setTitle').value = S.title;
     $('#setBg').value = S.bg;
+    $('#setWater').value = S.waterColor;
     $('#setFont').value = S.fontSize;
     $('#setGrid').checked = S.grid;
     $('#setLegend').checked = S.showLegend;
@@ -814,17 +944,32 @@
   }
 
   function setMode(m) {
+    if (m === 'terrain' && mode !== 'terrain') { modeBeforeTerrain = mode; sel = null; }
+    if (m !== 'terrain' && sel?.type === 'landmark') sel = null;
     mode = m;
+    document.body.classList.toggle('terrain-on', m === 'terrain');
+    $('#btnTerrain').classList.toggle('on', m === 'terrain');
+    renderTerrainControls();
     document.querySelectorAll('.tools [data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
     svg.setAttribute('class', `mode-${m}`);
     if (m === 'line' && !activeLine() && state.lines.length) activeLineId = state.lines[0].id;
     renderMap();
     renderLineList();
+    renderInspector();
+  }
+
+  function renderTerrainControls() {
+    document.body.classList.toggle('tt-landmark', terrainTool === 'landmark');
+    document.querySelectorAll('[data-ttool]').forEach((b) => b.classList.toggle('active', b.dataset.ttool === terrainTool));
+    document.querySelectorAll('[data-pstyle]').forEach((b) => b.classList.toggle('active', b.dataset.pstyle === paintStyle));
+    $('#brushSize').value = brushSize;
+    $('#lmPalette').innerHTML = LANDMARKS.map(([id, g, n]) => `<button class="lm-chip ${id === lmIcon ? 'active' : ''}" data-lmicon="${id}" title="${n}">${g}</button>`).join('');
   }
 
   // ---------- 駅名のその場編集 ----------
+  const editTarget = (ne) => (ne.kind === 'landmark' ? landmarkById(ne.id) : state.stations[ne.id]);
   function positionNameEditor() {
-    const st = state.stations[nameEdit.id];
+    const st = editTarget(nameEdit);
     if (!st) return;
     const stage = $('#stage').getBoundingClientRect();
     const bw = nameEditor.offsetWidth || 220, bh = nameEditor.offsetHeight || 90;
@@ -835,13 +980,15 @@
     nameEditor.style.top = clamp(top, 8, stage.height - bh - 8) + 'px';
   }
 
-  function openNameEditor(id, isNew) {
-    const st = state.stations[id];
+  function openNameEditor(id, isNew, kind = 'station') {
+    const st = kind === 'landmark' ? landmarkById(id) : state.stations[id];
     if (!st) return;
     closeNameEditor(true);
-    nameEdit = { id, orig: { name: st.name, sub: st.sub }, pushed: false, isNew };
+    nameEdit = { id, kind, orig: { name: st.name, sub: st.sub }, pushed: false, isNew };
     $('#neName').value = st.name;
-    $('#neSub').value = st.sub;
+    $('#neName').placeholder = kind === 'landmark' ? 'ランドマークの名前' : '駅名';
+    $('#neSub').value = st.sub || '';
+    $('#neSub').hidden = kind === 'landmark';
     nameEditor.hidden = false;
     positionNameEditor();
     const inp = $('#neName');
@@ -854,10 +1001,10 @@
     const ne = nameEdit;
     nameEdit = null;
     nameEditor.hidden = true;
-    const st = state.stations[ne.id];
+    const st = editTarget(ne);
     if (!apply && st) {
       st.name = ne.orig.name;
-      st.sub = ne.orig.sub;
+      if (ne.kind !== 'landmark') st.sub = ne.orig.sub;
       if (ne.pushed) { undoStack.pop(); updateUndoButtons(); }
     }
     if (!silent) { renderMap(); renderInspector(); save(); }
@@ -865,7 +1012,7 @@
 
   nameEditor.addEventListener('input', (e) => {
     if (!nameEdit) return;
-    const st = state.stations[nameEdit.id];
+    const st = editTarget(nameEdit);
     if (!st) return;
     if (!nameEdit.pushed && !nameEdit.isNew) { pushUndo(); nameEdit.pushed = true; }
     if (e.target.id === 'neName') st.name = e.target.value;
@@ -939,11 +1086,13 @@
   function startPinch() {
     const [a, b] = [...pointers.values()];
     if (drag?.type === 'station' && drag.moved) finishStationDrag();
+    const hadPaint = drag?.type === 'paint';
     drag = {
       type: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y) || 1,
       m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, v0: { ...view },
     };
     lastTap = null;
+    if (hadPaint) renderTerrainPreview();
   }
 
   svg.addEventListener('pointerdown', (e) => {
@@ -962,6 +1111,25 @@
     const lnEl = e.target.closest('[data-line]');
 
     if (e.button === 1 || e.button === 2 || spaceDown) { drag = { type: 'pan', sp, orig: { ...view }, moved: false }; return; }
+
+    if (mode === 'terrain') {
+      const lmEl = e.target.closest('[data-landmark]');
+      if (lmEl) {
+        const l = landmarkById(lmEl.dataset.landmark);
+        if (!l) return;
+        sel = { type: 'landmark', id: l.id };
+        drag = { type: 'landmark', id: l.id, sp, start: w, orig: { x: l.x, y: l.y }, moved: false, tap: { kind: 'landmark', id: l.id, sp } };
+        renderMap(); renderInspector();
+        return;
+      }
+      if (terrainTool === 'landmark') {
+        drag = { type: 'pan', sp, orig: { ...view }, moved: false, tap: { kind: 'lm-place', sp, w } };
+        return;
+      }
+      drag = { type: 'paint', kind: terrainTool, fill: paintStyle === 'fill', w: brushSize, pts: [[w.x, w.y]], sp, lastSp: sp };
+      renderTerrainPreview();
+      return;
+    }
 
     if (stEl) {
       const id = stEl.dataset.station;
@@ -1034,6 +1202,24 @@
 
     const moved = Math.hypot(sp.x - (drag.sp?.x ?? sp.x), sp.y - (drag.sp?.y ?? sp.y)) >= 5;
 
+    if (drag.type === 'paint') {
+      if (Math.hypot(sp.x - drag.lastSp.x, sp.y - drag.lastSp.y) < 3) return;
+      drag.pts.push([w.x, w.y]);
+      drag.lastSp = sp;
+      renderTerrainPreview();
+      return;
+    }
+    if (drag.type === 'landmark') {
+      const l = landmarkById(drag.id);
+      if (!l || (!drag.moved && !moved)) return;
+      if (!drag.moved) { pushUndo(); drag.moved = true; }
+      l.x = Math.round(drag.orig.x + (w.x - drag.start.x));
+      l.y = Math.round(drag.orig.y + (w.y - drag.start.y));
+      gLandmarks.innerHTML = state.terrain.landmarks.map(landmarkMarkup).join('');
+      renderSelection();
+      return;
+    }
+
     if (drag.type === 'station') {
       const a = drag.origs[drag.anchor];
       if (!a || !state.stations[drag.anchor]) { drag = null; return; }
@@ -1091,7 +1277,7 @@
 
   function handleTap(tap, e) {
     const now = performance.now();
-    const key = tap.kind === 'station' ? 'st:' + tap.id : tap.kind === 'line' ? 'ln:' + tap.seg : 'bg';
+    const key = tap.kind === 'landmark' ? 'lm:' + tap.id : tap.kind === 'station' ? 'st:' + tap.id : tap.kind === 'line' ? 'ln:' + tap.seg : 'bg';
     if (lastTap && now - lastTap.t < DOUBLE_TAP_MS && lastTap.key === key &&
       Math.hypot(tap.sp.x - lastTap.sp.x, tap.sp.y - lastTap.sp.y) < 24) {
       lastTap = null;
@@ -1102,7 +1288,26 @@
     return false;
   }
 
+  function finishPaint(d) {
+    let pts = d.pts.map((p) => [Math.round(p[0]), Math.round(p[1])]);
+    if (d.fill && pts.length < 3) { renderTerrainPreview(); return; }
+    if (pts.length === 1) pts.push(pts[0].slice());
+    pushUndo();
+    state.terrain.shapes.push({ t: d.kind, f: d.fill, w: d.fill ? 0 : d.w, p: pts.flat() });
+    commit();
+  }
+
+  function placeLandmark(w) {
+    pushUndo();
+    const l = { id: uid('m'), x: Math.round(w.x), y: Math.round(w.y), icon: lmIcon, name: '' };
+    state.terrain.landmarks.push(l);
+    sel = { type: 'landmark', id: l.id };
+    commit();
+    openNameEditor(l.id, true, 'landmark');
+  }
+
   function onDoubleTap(tap) {
+    if (tap.kind === 'landmark') { openNameEditor(tap.id, false, 'landmark'); return; }
     if (tap.kind === 'station') { openNameEditor(tap.id); return; }
     if (mode === 'line') {
       const x = snap(tap.w.x), y = snap(tap.w.y);
@@ -1138,6 +1343,12 @@
     const d = drag;
     drag = null;
     svg.classList.remove('panning');
+    if (d.type === 'paint') { if (e.type === 'pointerup') finishPaint(d); else renderTerrainPreview(); return; }
+    if (d.type === 'landmark') {
+      if (d.moved) { save(); renderMap(); }
+      else if (e.type === 'pointerup') handleTap(d.tap, e);
+      return;
+    }
     if (d.type === 'station') {
       if (d.moved) { drag = d; finishStationDrag(); drag = null; renderOverlays(); }
       else if (d.tap && e.type === 'pointerup') handleTap(d.tap, e);
@@ -1153,6 +1364,7 @@
     if (d.type === 'pan' && d.moved) { lastTap = null; return; }
     // 動かずに離した = タップ
     if (e.type !== 'pointerup') return;
+    if (d.tap?.kind === 'lm-place') { placeLandmark(d.tap.w); return; }
     if (d.tap && handleTap(d.tap, e)) return;
     if (d.clickDeselect && sel && !e.shiftKey && mode !== 'range') {
       sel = null;
@@ -1243,6 +1455,7 @@
     const k = e.key.toLowerCase();
     if (k === 'v') setMode('select');
     else if (k === 'r') setMode('range');
+    else if (k === 't') setMode(mode === 'terrain' ? modeBeforeTerrain : 'terrain');
     else if (k === 's') setMode('station');
     else if (k === 'l') setMode('line');
     else if (k === 'd') setMode('delete');
@@ -1250,6 +1463,7 @@
     else if (k === 'escape') { sel = null; if (mode !== 'select') setMode('select'); renderMap(); renderInspector(); }
     else if (k === 'delete' || k === 'backspace') {
       if (ids.length) { pushUndo(); deleteStations(ids); commit(); }
+      else if (sel?.type === 'landmark') { pushUndo(); state.terrain.landmarks = state.terrain.landmarks.filter((l) => l.id !== sel.id); sel = null; commit(); }
       else if (sel?.type === 'line') {
         const ln = lineById(sel.id);
         if (ln && confirm(`路線「${ln.name}」を削除しますか？`)) { pushUndo(); deleteLine(ln.id); commit(); }
@@ -1324,6 +1538,18 @@
         if (f === 'sub') st.sub = e.target.value;
       }
       renderMap();
+    } else if (sel?.type === 'landmark') {
+      const l = landmarkById(sel.id);
+      if (!l) return;
+      beginEdit();
+      if (f === 'lmname') l.name = e.target.value;
+      renderMap();
+    } else if (mode === 'terrain' && (f === 'water' || f === 'land')) {
+      beginEdit();
+      if (f === 'water') state.settings.waterColor = e.target.value;
+      else state.settings.bg = e.target.value;
+      renderMap();
+      renderSettings();
     } else if (sel?.type === 'line') {
       const ln = lineById(sel.id);
       if (!ln) return;
@@ -1377,6 +1603,15 @@
       }
       return;
     }
+    if (sel?.type === 'landmark') {
+      const l = landmarkById(sel.id);
+      if (!l) return;
+      if (act === 'lm-icon') { pushUndo(); l.icon = b.dataset.icon; lmIcon = l.icon; renderTerrainControls(); commit(); }
+      else if (act === 'lm-delete') { pushUndo(); state.terrain.landmarks = state.terrain.landmarks.filter((x) => x.id !== l.id); sel = null; commit(); }
+      return;
+    }
+    if (act === 'terrain-clear-shapes' && confirm('水域・陸地の塗りをすべて消しますか？')) { pushUndo(); state.terrain.shapes = []; commit(); return; }
+    if (act === 'terrain-clear-landmarks' && confirm('ランドマークをすべて消しますか？')) { pushUndo(); state.terrain.landmarks = []; sel = null; commit(); return; }
     if (sel?.type === 'line') {
       const ln = lineById(sel.id);
       if (!ln) return;
@@ -1427,12 +1662,13 @@
       save();
     };
   }
-  ['#setTitle', '#setBg', '#setFont', '#setGrid', '#setLegend', '#setScale'].forEach((s) => {
+  ['#setTitle', '#setBg', '#setWater', '#setFont', '#setGrid', '#setLegend', '#setScale'].forEach((s) => {
     $(s).addEventListener('change', () => { settingsEditing.on = false; });
     $(s).addEventListener('blur', () => { settingsEditing.on = false; });
   });
   $('#setTitle').addEventListener('input', settingInput((t) => { state.settings.title = t.value; }));
   $('#setBg').addEventListener('input', settingInput((t) => { state.settings.bg = t.value; }));
+  $('#setWater').addEventListener('input', settingInput((t) => { state.settings.waterColor = t.value; }));
   $('#setFont').addEventListener('input', settingInput((t) => { const v = Number(t.value); if (v >= 8 && v <= 40) state.settings.fontSize = v; }));
   $('#setScale').addEventListener('input', settingInput((t) => { state.settings.stationScale = Number(t.value); }));
   $('#setGrid').addEventListener('input', settingInput((t) => { state.settings.grid = t.checked; settingsEditing.on = false; }));
@@ -1449,6 +1685,25 @@
 
   // ---------- ツールバー ----------
   document.querySelectorAll('.tools [data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  $('#btnTerrain').addEventListener('click', () => setMode(mode === 'terrain' ? modeBeforeTerrain : 'terrain'));
+  $('#btnTerrainDone').addEventListener('click', () => setMode(modeBeforeTerrain === 'terrain' ? 'select' : modeBeforeTerrain));
+  document.querySelectorAll('[data-ttool]').forEach((b) => b.addEventListener('click', () => {
+    terrainTool = b.dataset.ttool;
+    if (sel?.type === 'landmark' && terrainTool !== 'landmark') sel = null;
+    renderTerrainControls(); renderMap(); renderInspector();
+  }));
+  document.querySelectorAll('[data-pstyle]').forEach((b) => b.addEventListener('click', () => {
+    paintStyle = b.dataset.pstyle; renderTerrainControls(); renderOverlays();
+  }));
+  $('#brushSize').addEventListener('input', (e) => { brushSize = Number(e.target.value); });
+  $('#lmPalette').addEventListener('click', (e) => {
+    const c = e.target.closest('[data-lmicon]');
+    if (!c) return;
+    lmIcon = c.dataset.lmicon;
+    const l = sel?.type === 'landmark' && landmarkById(sel.id);
+    if (l && l.icon !== lmIcon) { pushUndo(); l.icon = lmIcon; commit(); }
+    renderTerrainControls();
+  });
   $('#btnUndo').addEventListener('click', undo);
   $('#btnRedo').addEventListener('click', redo);
   $('#zoomIn').addEventListener('click', () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.25); });
@@ -1514,8 +1769,15 @@
 
   // ---------- 書き出し ----------
   function buildExportSVG() {
-    const groups = [gLines, gStations, gLabels];
+    const groups = [gLines, gLandmarks, gStations, gLabels];
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const sh of state.terrain.shapes) {
+      const h = sh.f ? 0 : sh.w / 2;
+      for (let i = 0; i < sh.p.length; i += 2) {
+        x0 = Math.min(x0, sh.p[i] - h); x1 = Math.max(x1, sh.p[i] + h);
+        y0 = Math.min(y0, sh.p[i + 1] - h); y1 = Math.max(y1, sh.p[i + 1] + h);
+      }
+    }
     for (const g of groups) {
       if (!g.childNodes.length) continue;
       const b = g.getBBox();
@@ -1557,7 +1819,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family='${FONT}'>
 <rect width="100%" height="100%" fill="${esc(S.bg)}"/>
 ${title}
-<g transform="translate(${r1(tx)} ${r1(ty)})">${gLines.innerHTML}${clean(gStations.innerHTML)}${gLabels.innerHTML}</g>
+<g transform="translate(${r1(tx)} ${r1(ty)})">${gTerrain.innerHTML}${gLines.innerHTML}<g font-family='${FONT}'>${gLandmarks.innerHTML.replace(/<circle r="[^"]*" fill="transparent"\/>/g, '')}</g>${clean(gStations.innerHTML)}${gLabels.innerHTML}</g>
 ${legend}
 </svg>`;
   }

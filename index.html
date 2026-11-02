@@ -19,6 +19,7 @@
     </div>
 
     <div class="file-actions hscroll" aria-label="ファイル">
+      <button id="btnTerrain" class="terrain-toggle" title="地形エディター (T)">⛰ 地形</button>
       <button id="btnNew" title="新しい路線図">新規</button>
       <button id="btnSample" title="サンプルを読み込む">サンプル</button>
       <button id="btnOpen" title="JSONファイルを開く">開く</button>
@@ -38,13 +39,33 @@
       <button data-mode="delete" title="削除 (D)"><span class="ico">✕</span><span>削除</span></button>
     </div>
 
+    <div class="tools terrain-tools" role="toolbar" aria-label="地形ツール">
+      <button data-ttool="water" title="水域（海・川・湖）"><span class="ico">🌊</span><span>水域</span></button>
+      <button data-ttool="land" title="陸地（水域を消す）"><span class="ico">🟩</span><span>陸地</span></button>
+      <button data-ttool="landmark" title="ランドマーク"><span class="ico">📍</span><span>ランドマーク</span></button>
+      <button id="btnTerrainDone" class="done" title="地形の編集を終える"><span class="ico">✓</span><span>完了</span></button>
+    </div>
+
     <div class="quick hscroll" aria-label="クイック操作">
       <button id="btnUndo" title="元に戻す (Ctrl+Z)">↶</button>
       <button id="btnRedo" title="やり直し (Ctrl+Y)">↷</button>
       <span class="sep"></span>
-      <button id="btnReverse" title="選択中の路線の向きを反転">⇄ 向きを反転</button>
       <span class="sep"></span>
-      <div class="line-chips" id="lineChips"></div>
+      <div class="q-normal">
+        <button id="btnReverse" title="選択中の路線の向きを反転">⇄ 向きを反転</button>
+        <span class="sep"></span>
+        <div class="line-chips" id="lineChips"></div>
+      </div>
+      <div class="q-terrain">
+        <div class="q-brush">
+          <div class="seg-toggle">
+            <button data-pstyle="brush" title="なぞって塗る">🖌 ブラシ</button>
+            <button data-pstyle="fill" title="囲んだ内側を塗る">⭕ 囲んで塗る</button>
+          </div>
+          <label class="brush-size" title="ブラシの太さ">太さ <input type="range" id="brushSize" min="8" max="200" step="4"></label>
+        </div>
+        <div class="q-landmark" id="lmPalette"></div>
+      </div>
     </div>
     <input type="file" id="fileInput" accept=".json,application/json" hidden>
   </header>
@@ -58,10 +79,15 @@
           </pattern>
         </defs>
         <rect id="bgRect" width="100%" height="100%" fill="#fff"/>
+        <g id="terrainVp">
+          <g id="gTerrain"></g>
+          <g id="gTerrainPreview"></g>
+        </g>
         <rect id="gridRect" width="100%" height="100%" fill="url(#gridPattern)"/>
         <g id="viewport">
           <g id="gSelUnder"></g>
           <g id="gLines"></g>
+          <g id="gLandmarks"></g>
           <g id="gHits"></g>
           <g id="gStations"></g>
           <g id="gLabels"></g>
@@ -103,7 +129,8 @@
           <input type="text" id="setTitle" maxlength="60">
         </label>
         <div class="row">
-          <label class="field">背景色 <input type="color" id="setBg"></label>
+          <label class="field">陸地（背景）の色 <input type="color" id="setBg"></label>
+          <label class="field">水の色 <input type="color" id="setWater"></label>
           <label class="field">文字サイズ <input type="number" id="setFont" min="8" max="40" step="1"></label>
         </div>
         <label class="field">駅マークの大きさ
@@ -143,9 +170,10 @@
           <li><b>路線</b>ツールで駅を順にクリックすると、選択中の路線が延びます。空白を<b>ダブルクリック</b>すると新しい駅を作って延長します。<kbd>Shift</kbd>+クリックで起点側に追加、始発駅をクリックすると環状線になります。</li>
           <li><b>選択</b>ツールで駅をドラッグして移動。別の駅に重ねると1つの乗換駅に統合されます。区間をクリックすると、曲がり方（2通りの折れ方／直線）を選べます。</li>
           <li><b>範囲選択</b>: 背景をドラッグ（スマホは<b>範囲</b>ツール）で複数の駅を選択。<kbd>Shift</kbd>+クリックで追加・解除。まとめて移動・整列・削除・路線化ができます。</li>
+          <li><b>⛰ 地形</b>ボタンで地形エディターに切り替え。<b>水域</b>で海・川・湖をなぞって塗り（「囲んで塗る」なら囲んだ内側を塗りつぶし）、<b>陸地</b>で水域を消して海岸線を整えます。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
           <li>ホイールまたは2本指で拡大縮小。右ドラッグ・<kbd>Space</kbd>+ドラッグ・タッチ操作で画面移動。</li>
         </ol>
-        <p class="muted">ショートカット: V 選択 / R 範囲 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
+        <p class="muted">ショートカット: V 選択 / R 範囲 / T 地形 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
       </section>
     </aside>
   </main>

@@ -18,6 +18,18 @@
       <span>路線図メーカー</span>
     </div>
 
+    <div class="file-actions hscroll" aria-label="ファイル">
+      <button id="btnNew" title="新しい路線図">新規</button>
+      <button id="btnSample" title="サンプルを読み込む">サンプル</button>
+      <button id="btnOpen" title="JSONファイルを開く">開く</button>
+      <button id="btnSave" title="JSONファイルとして保存">保存</button>
+    </div>
+
+    <div class="export">
+      <button id="btnPNG" class="primary" title="PNG画像として書き出し">PNG</button>
+      <button id="btnSVG" class="primary" title="SVG画像として書き出し">SVG</button>
+    </div>
+
     <div class="tools" role="toolbar" aria-label="ツール">
       <button data-mode="select" title="選択・移動 (V)"><span class="ico">↖</span><span>選択</span></button>
       <button data-mode="range" title="範囲選択 (R)"><span class="ico">⬚</span><span>範囲</span></button>
@@ -26,19 +38,15 @@
       <button data-mode="delete" title="削除 (D)"><span class="ico">✕</span><span>削除</span></button>
     </div>
 
-    <div class="actions">
+    <div class="quick hscroll" aria-label="クイック操作">
       <button id="btnUndo" title="元に戻す (Ctrl+Z)">↶</button>
       <button id="btnRedo" title="やり直し (Ctrl+Y)">↷</button>
       <span class="sep"></span>
-      <button id="btnNew" title="新しい路線図">新規</button>
-      <button id="btnSample" title="サンプルを読み込む">サンプル</button>
-      <button id="btnOpen" title="JSONファイルを開く">開く</button>
-      <button id="btnSave" title="JSONファイルとして保存">保存</button>
+      <button id="btnReverse" title="選択中の路線の向きを反転">⇄ 向きを反転</button>
       <span class="sep"></span>
-      <button id="btnSVG" class="primary" title="SVG画像として書き出し">SVG</button>
-      <button id="btnPNG" class="primary" title="PNG画像として書き出し">PNG</button>
-      <input type="file" id="fileInput" accept=".json,application/json" hidden>
+      <div class="line-chips" id="lineChips"></div>
     </div>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
   </header>
 
   <main class="layout">

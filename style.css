@@ -66,21 +66,58 @@ kbd { font-family: ui-monospace, monospace; font-size: 11px; border: 1px solid v
 
 /* ---------- top bar ---------- */
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "brand file export"
+    "tools tools tools"
+    "quick quick quick";
   align-items: center;
-  gap: 12px;
+  gap: 8px 10px;
   padding: 8px 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
-.tools { display: flex; gap: 4px; background: var(--surface-2); padding: 3px; border-radius: 8px; }
-.tools button { border: none; background: transparent; display: flex; align-items: center; gap: 4px; }
+.brand { grid-area: brand; display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+.file-actions { grid-area: file; }
+.export { grid-area: export; display: flex; gap: 4px; }
+.tools { grid-area: tools; display: flex; gap: 4px; background: var(--surface-2); padding: 3px; border-radius: 8px; }
+.tools button { border: none; background: transparent; display: flex; align-items: center; justify-content: center; gap: 4px; flex: 1; }
 .tools button .ico { font-size: 15px; line-height: 1; }
 .tools button.active { background: var(--accent); color: var(--accent-text); }
-.actions { display: flex; gap: 4px; align-items: center; margin-left: auto; flex-wrap: wrap; }
-.sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+.quick { grid-area: quick; }
+.sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
+
+/* 横スクロールする帯 */
+.hscroll {
+  display: flex; align-items: center; gap: 4px;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  min-width: 0;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+          mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  padding-right: 18px;
+}
+.hscroll::-webkit-scrollbar { display: none; }
+.hscroll > * { flex-shrink: 0; }
+
+.line-chips { display: flex; gap: 6px; align-items: center; }
+.chip {
+  min-width: 36px; height: 34px; padding: 0 8px;
+  border-radius: 8px; border: 2px solid transparent;
+  color: #fff; font-weight: 700; font-size: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.chip.active { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface) inset; }
+.chip.add { background: var(--surface-2); color: var(--text); border: 1px dashed var(--border); font-weight: 400; }
+
+@media (min-width: 1200px) {
+  .topbar {
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "brand file tools quick export";
+  }
+  .tools button { flex: none; }
+}
 
 /* ---------- layout ---------- */
 .layout { flex: 1; display: flex; min-height: 0; }
@@ -200,7 +237,6 @@ select { cursor: pointer; }
   .layout { flex-direction: column; }
   .stage { flex: none; height: 62vh; }
   .sidebar { width: 100%; border-left: none; border-top: 1px solid var(--border); overflow: visible; }
-  .actions { margin-left: 0; }
   .brand span { display: none; }
   .tools button span:not(.ico) { font-size: 12px; }
   .name-editor input { font-size: 16px; }

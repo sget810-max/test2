@@ -646,7 +646,17 @@
     $('#hint').textContent = hint;
   }
 
+  function renderLineChips() {
+    $('#lineChips').innerHTML = state.lines.map((l) => `<button class="chip ${l.id === activeLineId ? 'active' : ''}" data-chip="${esc(l.id)}" style="background:${esc(l.color)}" title="${esc(l.name)}">${esc(l.code || l.name.slice(0, 1) || '?')}</button>`).join('')
+      + '<button class="chip add" data-chip-add title="路線を追加">＋</button>';
+    const ln = activeLine();
+    const rb = $('#btnReverse');
+    rb.disabled = !ln || ln.stations.length < 2;
+    rb.title = ln ? `「${ln.name}」の向きを反転` : '路線を選んでください';
+  }
+
   function renderLineList() {
+    renderLineChips();
     if (!state.lines.length) {
       lineList.innerHTML = '<li class="empty">路線がありません。「＋ 路線を追加」から作成しましょう。</li>';
       return;
@@ -1255,6 +1265,28 @@
     activeLineId = li.dataset.lineId;
     sel = { type: 'line', id: activeLineId, seg: null };
     renderAll();
+  });
+
+  $('#lineChips').addEventListener('click', (e) => {
+    const c = e.target.closest('[data-chip]');
+    if (c) {
+      activeLineId = c.dataset.chip;
+      sel = { type: 'line', id: activeLineId, seg: null };
+      renderAll();
+      const ln = activeLine();
+      if (ln) toast(`「${ln.name}」を選択`);
+      return;
+    }
+    if (e.target.closest('[data-chip-add]')) $('#btnAddLine').click();
+  });
+
+  $('#btnReverse').addEventListener('click', () => {
+    const ln = activeLine();
+    if (!ln || ln.stations.length < 2) return;
+    pushUndo();
+    ln.stations.reverse();
+    commit();
+    toast(`「${ln.name}」の向きを反転しました`);
   });
 
   $('#btnAddLine').addEventListener('click', () => {

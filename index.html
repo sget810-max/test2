@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>路線図メーカー</title>
+  <meta name="description" content="架空の鉄道路線図をブラウザで作成・保存・書き出しできるエディタ">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+        <path d="M4 22 H14 L24 12 H30" stroke="#e60012" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M10 4 V14 L20 24 V30" stroke="#0079c2" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15.5" cy="20.5" r="4" fill="#fff" stroke="#222" stroke-width="2"/>
+      </svg>
+      <span>路線図メーカー</span>
+    </div>
+
+    <div class="tools" role="toolbar" aria-label="ツール">
+      <button data-mode="select" title="選択・移動 (V)"><span class="ico">↖</span><span>選択</span></button>
+      <button data-mode="station" title="駅を追加 (S)"><span class="ico">◎</span><span>駅</span></button>
+      <button data-mode="line" title="路線を描く (L)"><span class="ico">〰</span><span>路線</span></button>
+      <button data-mode="delete" title="削除 (D)"><span class="ico">✕</span><span>削除</span></button>
+    </div>
+
+    <div class="actions">
+      <button id="btnUndo" title="元に戻す (Ctrl+Z)">↶</button>
+      <button id="btnRedo" title="やり直し (Ctrl+Y)">↷</button>
+      <span class="sep"></span>
+      <button id="btnNew" title="新しい路線図">新規</button>
+      <button id="btnSample" title="サンプルを読み込む">サンプル</button>
+      <button id="btnOpen" title="JSONファイルを開く">開く</button>
+      <button id="btnSave" title="JSONファイルとして保存">保存</button>
+      <span class="sep"></span>
+      <button id="btnSVG" class="primary" title="SVG画像として書き出し">SVG</button>
+      <button id="btnPNG" class="primary" title="PNG画像として書き出し">PNG</button>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="stage" id="stage">
+      <svg id="map" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="gridPattern" width="20" height="20" patternUnits="userSpaceOnUse">
+            <path d="M20 0H0V20" fill="none" stroke="#000" stroke-opacity="0.08" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <rect id="bgRect" width="100%" height="100%" fill="#fff"/>
+        <rect id="gridRect" width="100%" height="100%" fill="url(#gridPattern)"/>
+        <g id="viewport">
+          <g id="gSelUnder"></g>
+          <g id="gLines"></g>
+          <g id="gHits"></g>
+          <g id="gStations"></g>
+          <g id="gLabels"></g>
+          <g id="gPreview"></g>
+          <g id="gSelOver"></g>
+        </g>
+      </svg>
+
+      <div class="overlay title" id="mapTitle"></div>
+      <div class="overlay legend" id="legend"></div>
+      <div class="overlay hint" id="hint"></div>
+      <div class="overlay zoom">
+        <button id="zoomIn" title="拡大">＋</button>
+        <button id="zoomOut" title="縮小">－</button>
+        <button id="zoomFit" title="全体を表示">⤢</button>
+      </div>
+      <div class="toast" id="toast"></div>
+    </section>
+
+    <aside class="sidebar">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>路線</h2>
+          <button id="btnAddLine" class="small primary">＋ 路線を追加</button>
+        </div>
+        <ul class="line-list" id="lineList"></ul>
+      </section>
+
+      <section class="panel" id="inspector"></section>
+
+      <section class="panel">
+        <h2>地図の設定</h2>
+        <label class="field">タイトル
+          <input type="text" id="setTitle" maxlength="60">
+        </label>
+        <div class="row">
+          <label class="field">背景色 <input type="color" id="setBg"></label>
+          <label class="field">文字サイズ <input type="number" id="setFont" min="8" max="40" step="1"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="setGrid"> グリッドを表示</label>
+        <label class="check"><input type="checkbox" id="setLegend"> 凡例を表示</label>
+      </section>
+
+      <section class="panel help">
+        <h2>使い方</h2>
+        <ol>
+          <li><b>駅</b>ツールで地図をクリックして駅を置きます。路線の上をクリックすると、その区間に駅を挿入できます。</li>
+          <li><b>路線</b>ツールで駅を順にクリックすると、選択中の路線が延びます。空白をクリックすると新しい駅を作って延長します。<kbd>Shift</kbd>+クリックで起点側に追加、始発駅をクリックすると環状線になります。</li>
+          <li><b>選択</b>ツールで駅をドラッグして移動。区間を<b>ダブルクリック</b>すると曲がり方（2通りの折れ方／直線）を切り替えます。</li>
+          <li>ホイールで拡大縮小、背景ドラッグ（または<kbd>Space</kbd>+ドラッグ）で移動。</li>
+        </ol>
+        <p class="muted">ショートカット: V 選択 / S 駅 / L 路線 / D 削除 / Delete 選択項目を削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
+      </section>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

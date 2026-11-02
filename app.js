@@ -27,7 +27,7 @@
     select: 'ダブルクリック（タップ）で駅を追加 ／ 駅をドラッグで移動（他の駅に重ねると乗換駅に統合）／ 背景ドラッグで範囲選択',
     range: 'ドラッグで範囲選択（Shiftで追加）／ 駅をタップで選択に追加・解除 ／ 選んだ駅はまとめて移動できます',
     station: 'ダブルクリック（タップ）で駅を追加 ／ 路線の上をダブルクリックするとその区間に駅を挿入',
-    line: '駅を順にクリックして路線を延長（Shift+クリックで起点側）／ 空白をダブルクリックで新駅を作成して延長',
+    line: '駅をクリックで路線を延長（Shift+クリックで起点側）／ ダブルクリックした場所を通るように線路を曲げる（□はドラッグで移動・ダブルクリックで削除）',
     delete: '駅または路線をクリックして削除',
   };
 
@@ -836,8 +836,7 @@
 
   function renderHandles() {
     const g = $('#gHandles');
-    if (mode !== 'select' || sel?.type !== 'line') { g.innerHTML = ''; return; }
-    const ln = lineById(sel.id);
+    const ln = mode === 'line' ? activeLine() : mode === 'select' && sel?.type === 'line' ? lineById(sel.id) : null;
     if (!ln) { g.innerHTML = ''; return; }
     const keys = new Set(linePairs(ln).map(([p, q]) => segKey(p, q)));
     const sz = 7 / view.k;
@@ -887,10 +886,13 @@
   function renderPreview() {
     const ln = activeLine();
     if (mode !== 'line' || !ln || !ln.stations.length || !cursorWorld || drag) { gPreview.innerHTML = ''; return; }
+    // 延長は既存の駅をクリックしたときだけなので、駅の上にいるときだけ予告線を出す
+    const target = stationNear(cursorWorld.x, cursorWorld.y);
     const last = state.stations[ln.stations[ln.stations.length - 1]];
-    const pts = routePoints(last, cursorWorld, 0);
+    if (!target || target.id === last.id) { gPreview.innerHTML = ''; return; }
+    const pts = routePoints(last, target, 0);
     gPreview.innerHTML = `<path d="${roundedPath(pts, 14)}" fill="none" stroke="${esc(ln.color)}" stroke-opacity="0.5" stroke-width="${ln.width}" stroke-dasharray="${ln.width * 1.5} ${ln.width}" stroke-linecap="round" pointer-events="none"/>`
-      + `<circle cx="${cursorWorld.x}" cy="${cursorWorld.y}" r="5" fill="none" stroke="${esc(ln.color)}" stroke-width="2" pointer-events="none"/>`;
+      + `<circle cx="${target.x}" cy="${target.y}" r="5" fill="none" stroke="${esc(ln.color)}" stroke-width="2" pointer-events="none"/>`;
   }
 
   function applyView() {
@@ -1336,7 +1338,7 @@
     }
 
     const wpEl = e.target.closest('[data-wp]');
-    if (wpEl && mode === 'select') {
+    if (wpEl && (mode === 'select' || mode === 'line')) {
       const key = wpEl.dataset.wp, idx = Number(wpEl.dataset.wpi);
       const p = state.waypoints[key]?.[idx];
       if (p) {
@@ -1535,6 +1537,37 @@
     for (let i = 0; i < d.n; i++) for (let j = 0; j < d.n; j++) d.cells.add(`${cx - o + i},${cy - o + j}`);
   }
 
+  /** 路線ツールのダブルクリック: 選択中の路線の最寄り区間に経由点を足し、線路をそこへ通す */
+  function addRoutePoint(w) {
+    const ln = activeLine();
+    const pairs = ln ? linePairs(ln) : [];
+    if (!pairs.length) { toast('経路を変えたい路線（2駅以上）を上の路線ボタンで選んでください'); return; }
+    let bestKey = null, bd = Infinity;
+    for (const [p, q] of pairs) {
+      const k = segKey(p, q);
+      const pts = geom.segs.get(k)?.pts || [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const A = pts[i], B = pts[i + 1];
+        const dx = B[0] - A[0], dy = B[1] - A[1], L2 = dx * dx + dy * dy;
+        const t = L2 ? clamp(((w.x - A[0]) * dx + (w.y - A[1]) * dy) / L2, 0, 1) : 0;
+        const d = Math.hypot(w.x - A[0] - t * dx, w.y - A[1] - t * dy);
+        if (d < bd) { bd = d; bestKey = k; }
+      }
+    }
+    if (!bestKey) return;
+    const pt = [snap(w.x), snap(w.y)];
+    const list = state.waypoints[bestKey] || [];
+    if (list.some((p) => p[0] === pt[0] && p[1] === pt[1])) return;
+    pushUndo();
+    const idx = waypointInsertIndex(bestKey, { x: pt[0], y: pt[1] });
+    list.splice(idx, 0, pt);
+    state.waypoints[bestKey] = list;
+    sel = { type: 'line', id: ln.id, seg: bestKey };
+    commit();
+    const [a, b] = bestKey.split('|');
+    toast(`「${ln.name}」の ${state.stations[a].name}–${state.stations[b].name} 間をここに通しました`);
+  }
+
   function finishPaint(d) {
     if (d.grid) {
       if (!d.cells.size) return;
@@ -1571,19 +1604,7 @@
       return;
     }
     if (tap.kind === 'station') { openNameEditor(tap.id); return; }
-    if (mode === 'line') {
-      const x = snap(tap.w.x), y = snap(tap.w.y);
-      const existing = stationNear(x, y);
-      if (existing) { if (extendLine(existing.id, tap.shift)) commit(); return; }
-      pushUndo();
-      const st = createStation(x, y);
-      const ln = activeLine() || createLine();
-      if (tap.shift) ln.stations.unshift(st.id); else ln.stations.push(st.id);
-      sel = { type: 'line', id: ln.id, seg: null };
-      commit();
-      if (prefs.autoName) openNameEditor(st.id, true);
-      return;
-    }
+    if (mode === 'line') { addRoutePoint(tap.w); return; }
     if (!['select', 'station', 'range'].includes(mode)) return;
     pushUndo();
     const { st, created } = placeStation(tap.w, tap.kind === 'line' ? tap.seg : null);

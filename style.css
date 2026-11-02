@@ -100,6 +100,7 @@ body.terrain-on .q-normal { display: none; }
 body.terrain-on .q-terrain { display: flex; }
 body:not(.tt-landmark) .q-landmark { display: none; }
 body.tt-landmark .q-brush { display: none; }
+.q-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .seg-toggle { display: flex; background: var(--surface-2); border-radius: 8px; padding: 2px; }
 .seg-toggle button { border: none; background: transparent; }
 .seg-toggle button.active { background: #0b8fd6; color: #fff; }

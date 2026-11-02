@@ -58,12 +58,13 @@
       </div>
       <div class="q-terrain">
         <div class="q-brush">
+          <span class="q-label">一度に塗る</span>
           <div class="seg-toggle">
-            <button data-pstyle="brush" title="なぞって塗る">🖌 ブラシ</button>
-            <button data-pstyle="fill" title="囲んだ内側を塗る">⭕ 囲んで塗る</button>
-            <button data-pstyle="grid" title="グリッドのマス目ごとに塗る">▦ マス目</button>
+            <button data-cells="1" title="1マスずつ塗る">▪ 1マス</button>
+            <button data-cells="2" title="2×2マスずつ塗る">2×2</button>
+            <button data-cells="3" title="3×3マスずつ塗る">3×3</button>
+            <button data-cells="5" title="5×5マスずつ塗る">5×5</button>
           </div>
-          <label class="brush-size" title="ブラシの太さ">太さ <input type="range" id="brushSize" min="8" max="200" step="4"></label>
         </div>
         <div class="q-landmark" id="lmPalette"></div>
       </div>
@@ -143,9 +144,8 @@
 
       <section class="panel">
         <h2>操作設定 <span class="muted">（このブラウザに保存）</span></h2>
-        <label class="check"><input type="checkbox" id="prefSnap"> 駅をグリッドに吸着させる（Altキーで一時解除）</label>
         <div class="row">
-          <label class="field">グリッド間隔
+          <label class="field">グリッド間隔（マスの大きさ）
             <select id="prefGrid"><option value="10">細かい (10)</option><option value="20">標準 (20)</option><option value="40">粗い (40)</option></select>
           </label>
           <label class="field">新しい駅の名前
@@ -171,7 +171,7 @@
           <li><b>路線</b>ツールで駅を順にクリックすると、選択中の路線が延びます。空白を<b>ダブルクリック</b>すると新しい駅を作って延長します。<kbd>Shift</kbd>+クリックで起点側に追加、始発駅をクリックすると環状線になります。</li>
           <li><b>選択</b>ツールで駅をドラッグして移動。別の駅に重ねると1つの乗換駅に統合されます。区間をクリックすると、曲がり方（2通りの折れ方／直線）を選べます。</li>
           <li><b>範囲選択</b>: 背景をドラッグ（スマホは<b>範囲</b>ツール）で複数の駅を選択。<kbd>Shift</kbd>+クリックで追加・解除。まとめて移動・整列・削除・路線化ができます。</li>
-          <li><b>⛰ 地形</b>ボタンで地形エディターに切り替え。<b>水域</b>で海・川・湖をなぞって塗り（「囲んで塗る」なら囲んだ内側を塗りつぶし、「マス目」ならグリッド1マスずつ塗る）、<b>陸地</b>で水域を消して海岸線を整えます。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
+          <li><b>⛰ 地形</b>ボタンで地形エディターに切り替え。地形はすべてグリッドのマス目単位です。<b>水域</b>でマスをタップ・なぞって海・川・湖にし、<b>陸地</b>でマスを陸に戻します。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
           <li>ホイールまたは2本指で拡大縮小。右ドラッグ・<kbd>Space</kbd>+ドラッグ・タッチ操作で画面移動。</li>
         </ol>
         <p class="muted">ショートカット: V 選択 / R 範囲 / T 地形 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>

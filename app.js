@@ -19,12 +19,8 @@
   ];
   const LM = Object.fromEntries(LANDMARKS.map(([id, g, n]) => [id, { g, n }]));
   const TERRAIN_HINTS = {
-    'water-brush': '指（マウス）でなぞって水域を塗る ／ 2本指・右ドラッグで画面移動',
-    'water-fill': '囲むように描くと、内側を水域で塗りつぶします',
-    'land-brush': 'なぞった所を陸地に戻す（海岸線や川岸の調整に）',
-    'land-fill': '囲むように描くと、内側を陸地に戻します',
-    'water-grid': 'タップ・なぞったマス目を水域にします（太さで一度に塗るマス数を変更）',
-    'land-grid': 'タップ・なぞったマス目を陸地に戻します（太さで一度に塗るマス数を変更）',
+    water: 'マスをタップ・なぞって水域（海・川・湖）にする ／ 2本指・右ドラッグで画面移動',
+    land: 'マスをタップ・なぞって陸地に戻す ／ 2本指・右ドラッグで画面移動',
     landmark: 'タップでランドマークを配置 ／ ドラッグで移動 ／ ダブルタップで名前を編集',
   };
   const HINTS = {
@@ -66,8 +62,7 @@
   let nameEdit = null;
   const pointers = new Map();
   let terrainTool = 'water';
-  let paintStyle = 'brush';
-  let brushSize = 40;
+  let cellN = 1; // 一度に塗るマス数(一辺)
   let lmIcon = 'temple';
   let modeBeforeTerrain = 'select';
 
@@ -78,7 +73,8 @@
   const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
   const r1 = (v) => Math.round(v * 10) / 10;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const snap = (v, force) => (prefs.snap || force ? Math.round(v / prefs.gridSize) * prefs.gridSize : Math.round(v));
+  // すべての配置はグリッドに沿わせる
+  const snap = (v) => Math.round(v / prefs.gridSize) * prefs.gridSize;
 
   function toast(msg) {
     const t = $('#toast');
@@ -145,15 +141,48 @@
     ];
     s.terrain.shapes = [
       { t: 'water', f: true, w: 0, p: [-700, 40, -460, 40, -330, 120, -280, 300, -120, 380, 140, 400, 320, 440, 480, 560, -700, 560] },
-      { t: 'water', f: false, w: 26, p: [520, -420, 400, -330, 300, -260, 270, -140, 290, 20, 250, 200, 230, 330, 260, 440] },
-    ];
+      { t: 'water', f: false, w: 30, p: [520, -420, 400, -330, 300, -260, 270, -140, 290, 20, 250, 200, 230, 330, 260, 440] },
+    ].map((sh) => toCells(sh, 20));
     s.terrain.landmarks = [
       { id: 'lm1', x: -180, y: -180, icon: 'temple', name: '古寺' },
-      { id: 'lm2', x: 90, y: -90, icon: 'tower', name: '架空タワー' },
-      { id: 'lm3', x: -100, y: 110, icon: 'park', name: '中央公園' },
-      { id: 'lm4', x: -470, y: 110, icon: 'port', name: '西港ふ頭' },
+      { id: 'lm2', x: 100, y: -80, icon: 'tower', name: '架空タワー' },
+      { id: 'lm3', x: -100, y: 100, icon: 'park', name: '中央公園' },
+      { id: 'lm4', x: -460, y: 100, icon: 'port', name: '西港ふ頭' },
     ];
     return s;
+  }
+
+  /** 自由形状(旧形式)をマス目に変換 */
+  function toCells(sh, g) {
+    const pts = [];
+    for (let i = 0; i < sh.p.length; i += 2) pts.push([sh.p[i], sh.p[i + 1]]);
+    const h = sh.f ? 0 : Math.max(sh.w / 2, g / 2);
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const cx0 = Math.floor((Math.min(...xs) - h) / g), cx1 = Math.floor((Math.max(...xs) + h) / g);
+    const cy0 = Math.floor((Math.min(...ys) - h) / g), cy1 = Math.floor((Math.max(...ys) + h) / g);
+    const out = [];
+    const inPoly = (x, y) => {
+      let c = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const [xi, yi] = pts[i], [xj, yj] = pts[j];
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+      }
+      return c;
+    };
+    const nearLine = (x, y) => {
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[Math.min(i + 1, pts.length - 1)];
+        const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+        const t = L2 ? clamp(((x - a[0]) * dx + (y - a[1]) * dy) / L2, 0, 1) : 0;
+        if (Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy) <= h) return true;
+      }
+      return false;
+    };
+    for (let cx = cx0; cx <= cx1; cx++) for (let cy = cy0; cy <= cy1; cy++) {
+      const x = (cx + 0.5) * g, y = (cy + 0.5) * g;
+      if (sh.f ? inPoly(x, y) : nearLine(x, y)) out.push(cx, cy);
+    }
+    return out.length ? { t: sh.t, g, c: out } : null;
   }
 
   function normalize(raw) {
@@ -195,7 +224,7 @@
           return c.length >= 2 && c.length % 2 === 0 ? { t: sh.t, g, c } : null;
         }
         if (!Array.isArray(sh.p) || sh.p.length < 2 || sh.p.length % 2 || !sh.p.every(Number.isFinite)) return null;
-        return { t: sh.t, f: !!sh.f, w: clamp(Number(sh.w) || 0, 0, 400), p: sh.p.slice() };
+        return toCells({ t: sh.t, f: !!sh.f, w: clamp(Number(sh.w) || 0, 0, 400), p: sh.p }, 20);
       })
       .filter(Boolean);
     s.terrain.landmarks = (Array.isArray(T.landmarks) ? T.landmarks : [])
@@ -672,7 +701,7 @@
     gLandmarks.setAttribute('font-family', FONT);
     const S = state.settings;
     bgRect.setAttribute('fill', S.bg);
-    gridRect.style.display = S.grid || (mode === 'terrain' && paintStyle === 'grid' && terrainTool !== 'landmark') ? '' : 'none';
+    gridRect.style.display = S.grid || mode === 'terrain' ? '' : 'none';
 
     let lh = '', hh = '';
     for (let i = state.lines.length - 1; i >= 0; i--) {
@@ -759,7 +788,7 @@
     const ln = activeLine();
     const n = selIds().length;
     let hint = mode === 'line' ? (ln ? `【${ln.name}】 ` : '【新しい路線】 ') + HINTS.line : HINTS[mode];
-    if (mode === 'terrain') hint = '【地形】' + TERRAIN_HINTS[terrainTool === 'landmark' ? 'landmark' : `${terrainTool}-${paintStyle}`];
+    if (mode === 'terrain') hint = '【地形】' + TERRAIN_HINTS[terrainTool];
     if (n > 1 && (mode === 'select' || mode === 'range')) hint = `${n}駅を選択中 ／ ドラッグでまとめて移動・矢印キーで微調整・Deleteで削除`;
     $('#hint').textContent = hint;
   }
@@ -853,8 +882,10 @@
     inspector.innerHTML = `
       <h2>地形エディター</h2>
       <p class="muted">
-        <b>🌊 水域</b>: 海・川・湖を塗ります。「ブラシ」はなぞった所を、「囲んで塗る」は囲んだ内側を、「マス目」はグリッドのマスごとに塗ります（マスの大きさは操作設定のグリッド間隔、一度に塗るマス数は太さで変更）。<br>
-        <b>🟩 陸地</b>: 水域を消して陸地に戻します。海岸線や川岸の形を整えるのに使います。<br>
+        地形はすべて<b>グリッドのマス目単位</b>で塗ります。<br>
+        <b>🌊 水域</b>: タップ・なぞったマスを海・川・湖にします。<br>
+        <b>🟩 陸地</b>: タップ・なぞったマスを陸地に戻します。<br>
+        一度に塗るマス数は上の「1マス／2×2／3×3／5×5」で、マスの大きさは操作設定の「グリッド間隔」で変えられます。<br>
         <b>📍 ランドマーク</b>: 種類を選んでタップで配置。ドラッグで移動、ダブルタップで名前を編集。<br>
         描いている間は2本指（パソコンは右ドラッグ／Space+ドラッグ）で画面を動かせます。
       </p>
@@ -952,7 +983,6 @@
     $('#setGrid').checked = S.grid;
     $('#setLegend').checked = S.showLegend;
     $('#setScale').value = S.stationScale;
-    $('#prefSnap').checked = prefs.snap;
     $('#prefGrid').value = String(prefs.gridSize);
     $('#prefAutoName').checked = prefs.autoName;
     $('#prefPrefix').value = prefs.namePrefix;
@@ -986,8 +1016,7 @@
   function renderTerrainControls() {
     document.body.classList.toggle('tt-landmark', terrainTool === 'landmark');
     document.querySelectorAll('[data-ttool]').forEach((b) => b.classList.toggle('active', b.dataset.ttool === terrainTool));
-    document.querySelectorAll('[data-pstyle]').forEach((b) => b.classList.toggle('active', b.dataset.pstyle === paintStyle));
-    $('#brushSize').value = brushSize;
+    document.querySelectorAll('[data-cells]').forEach((b) => b.classList.toggle('active', Number(b.dataset.cells) === cellN));
     $('#lmPalette').innerHTML = LANDMARKS.map(([id, g, n]) => `<button class="lm-chip ${id === lmIcon ? 'active' : ''}" data-lmicon="${id}" title="${n}">${g}</button>`).join('');
   }
 
@@ -1151,11 +1180,8 @@
         drag = { type: 'pan', sp, orig: { ...view }, moved: false, tap: { kind: 'lm-place', sp, w } };
         return;
       }
-      drag = { type: 'paint', kind: terrainTool, fill: paintStyle === 'fill', w: brushSize, pts: [[w.x, w.y]], sp, lastSp: sp };
-      if (paintStyle === 'grid') {
-        Object.assign(drag, { grid: true, g: prefs.gridSize, n: clamp(Math.round(brushSize / prefs.gridSize), 1, 8), cells: new Set() });
-        addCells(drag, w);
-      }
+      drag = { type: 'paint', kind: terrainTool, grid: true, g: prefs.gridSize, n: cellN, cells: new Set(), pts: [[w.x, w.y]], sp, lastSp: sp };
+      addCells(drag, w);
       renderTerrainPreview();
       return;
     }
@@ -1214,7 +1240,7 @@
     const sp = screenPoint(e);
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, sp);
     const w = toWorldPt(sp);
-    cursorWorld = e.altKey ? { x: w.x, y: w.y } : { x: snap(w.x), y: snap(w.y) };
+    cursorWorld = { x: snap(w.x), y: snap(w.y) };
     if (!drag) { if (mode === 'line') renderPreview(); return; }
 
     if (drag.type === 'pinch') {
@@ -1248,8 +1274,9 @@
       const l = landmarkById(drag.id);
       if (!l || (!drag.moved && !moved)) return;
       if (!drag.moved) { pushUndo(); drag.moved = true; }
-      l.x = Math.round(drag.orig.x + (w.x - drag.start.x));
-      l.y = Math.round(drag.orig.y + (w.y - drag.start.y));
+      const nx = snap(drag.orig.x + (w.x - drag.start.x)), ny = snap(drag.orig.y + (w.y - drag.start.y));
+      if (nx === l.x && ny === l.y) return;
+      l.x = nx; l.y = ny;
       gLandmarks.innerHTML = state.terrain.landmarks.map(landmarkMarkup).join('');
       renderSelection();
       return;
@@ -1260,7 +1287,7 @@
       if (!a || !state.stations[drag.anchor]) { drag = null; return; }
       if (!drag.moved && !moved && Math.hypot(w.x - drag.start.x, w.y - drag.start.y) * view.k < 5) return;
       let nx = a.x + (w.x - drag.start.x), ny = a.y + (w.y - drag.start.y);
-      if (e.altKey) { nx = Math.round(nx); ny = Math.round(ny); } else { nx = snap(nx); ny = snap(ny); }
+      nx = snap(nx); ny = snap(ny);
       const dx = nx - a.x, dy = ny - a.y;
       const cur = state.stations[drag.anchor];
       if (cur.x === nx && cur.y === ny) { drag.moved = drag.moved || false; return; }
@@ -1347,7 +1374,7 @@
 
   function placeLandmark(w) {
     pushUndo();
-    const l = { id: uid('m'), x: Math.round(w.x), y: Math.round(w.y), icon: lmIcon, name: '' };
+    const l = { id: uid('m'), x: snap(w.x), y: snap(w.y), icon: lmIcon, name: '' };
     state.terrain.landmarks.push(l);
     sel = { type: 'landmark', id: l.id };
     commit();
@@ -1442,7 +1469,7 @@
   function alignStations(ids, axis) {
     const sts = ids.map((id) => state.stations[id]);
     const avg = sts.reduce((a, s) => a + s[axis], 0) / sts.length;
-    const v = snap(avg, prefs.snap);
+    const v = snap(avg);
     pushUndo();
     for (const s of sts) s[axis] = v;
     commit();
@@ -1579,7 +1606,7 @@
         const v = Number(e.target.value);
         if (!Number.isFinite(v) || e.target.value === '') return;
         beginEdit();
-        st[f] = Math.round(v);
+        st[f] = snap(v);
       } else {
         beginEdit();
         if (f === 'name') st.name = e.target.value;
@@ -1723,7 +1750,6 @@
   $('#setLegend').addEventListener('input', settingInput((t) => { state.settings.showLegend = t.checked; settingsEditing.on = false; }));
 
   // 操作設定
-  $('#prefSnap').addEventListener('change', (e) => { prefs.snap = e.target.checked; savePrefs(); });
   $('#prefGrid').addEventListener('change', (e) => { prefs.gridSize = Number(e.target.value); savePrefs(); applyGrid(); renderInspector(); });
   $('#prefAutoName').addEventListener('change', (e) => { prefs.autoName = e.target.checked; savePrefs(); });
   $('#prefPrefix').addEventListener('input', (e) => { prefs.namePrefix = e.target.value.slice(0, 20); savePrefs(); });
@@ -1740,10 +1766,9 @@
     if (sel?.type === 'landmark' && terrainTool !== 'landmark') sel = null;
     renderTerrainControls(); renderMap(); renderInspector();
   }));
-  document.querySelectorAll('[data-pstyle]').forEach((b) => b.addEventListener('click', () => {
-    paintStyle = b.dataset.pstyle; renderTerrainControls(); renderMap();
+  document.querySelectorAll('[data-cells]').forEach((b) => b.addEventListener('click', () => {
+    cellN = Number(b.dataset.cells); renderTerrainControls();
   }));
-  $('#brushSize').addEventListener('input', (e) => { brushSize = Number(e.target.value); });
   $('#lmPalette').addEventListener('click', (e) => {
     const c = e.target.closest('[data-lmicon]');
     if (!c) return;

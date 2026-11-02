@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>路線図メーカー</title>
   <meta name="description" content="架空の鉄道路線図をブラウザで作成・保存・書き出しできるエディタ">
-  <link rel="stylesheet" href="style.css?v=14">
+  <link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
   <header class="topbar">
@@ -42,6 +42,7 @@
 
     <div class="tools" role="toolbar" aria-label="ツール">
       <button data-mode="select" title="選択・移動 (V)"><span class="ico">↖</span><span>選択</span></button>
+      <button data-mode="view" title="閲覧（見るだけ・編集しない） (B)"><span class="ico">👁</span><span>閲覧</span></button>
       <button data-mode="range" title="範囲選択 (R)"><span class="ico">⬚</span><span>範囲</span></button>
       <button data-mode="station" title="駅を追加 (S)"><span class="ico">◎</span><span>駅</span></button>
       <button data-mode="line" title="路線を描く (L)"><span class="ico">〰</span><span>路線</span></button>
@@ -118,6 +119,7 @@
         <button id="zoomOut" title="縮小">－</button>
         <button id="zoomFit" title="全体を表示">⤢</button>
       </div>
+      <div class="view-card" id="viewCard" hidden></div>
       <div class="toast" id="toast"></div>
       <div class="name-editor" id="nameEditor" hidden>
         <input type="text" id="neName" placeholder="駅名" maxlength="40" aria-label="駅名">
@@ -182,6 +184,7 @@
           <li>駅は地図を<b>ダブルクリック（ダブルタップ）</b>して追加します（どのツールでも同じ）。路線の上なら、その区間に駅を挿入します。駅をダブルクリックすると駅名をその場で編集できます。</li>
           <li><b>路線</b>ツールで駅を順にクリックすると、選択中の路線が延びます。線を<b>タップ</b>して駅間を選び、地図を<b>ダブルクリック</b>すると、駅は作らずに、その駅間の線路がその場所を通るように曲がります（駅間を選んでいないときは最寄りの駅間）（経由点□はドラッグで移動、ダブルクリックで削除）。<kbd>Shift</kbd>+クリックで起点側に追加、始発駅をクリックすると環状線になります。</li>
           <li><b>選択</b>ツールで駅をドラッグして移動。別の駅に重ねると1つの乗換駅に統合されます。区間をクリックすると、曲がり方（2通りの折れ方／直線）を選べます。</li>
+          <li><b>閲覧</b>モードでは編集せずに地図を見られます。駅・路線・ランドマークをタップすると情報カードが出て、路線を選ぶとその路線だけが強調されます。</li>
           <li><b>経路を曲げる</b>: 路線ツールで線をタップして駅間を選び、ダブルタップ（または線をドラッグ）すると経由点（□）ができ、経路を自由に変えられます。□はその路線を選んでいるときだけ表示されます。□はドラッグで移動、ダブルタップで削除。区間を選ぶと「折れ線／直線／曲線」も選べます。</li>
           <li><b>ターミナル駅</b>: 駅を選んで「🚉 ターミナル」を押すと、二重丸の駅になります。</li>
           <li><b>乗り換え駅</b>: 駅を選んで右の欄の「＋ 乗り換え駅を追加」を押し、つなぎたい駅をタップすると、離れた駅どうしが連絡通路でつながります（2駅を範囲選択して「この2駅を乗り換え駅にする」でも可）。</li>
@@ -189,11 +192,11 @@
           <li>左上の<b>地形ロゴ</b>（青い川の絵）で地形エディターに、<b>路線図ロゴ</b>で路線図エディターに切り替え。地形はすべてグリッドのマス目単位です。<b>水域</b>でマスをタップ・なぞって海・川・湖にし、<b>陸地</b>でマスを陸に戻します。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
           <li>ホイールまたは2本指で拡大縮小。右ドラッグ・<kbd>Space</kbd>+ドラッグ・タッチ操作で画面移動。</li>
         </ol>
-        <p class="muted">ショートカット: V 選択 / R 範囲 / T 地形 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
+        <p class="muted">ショートカット: V 選択 / B 閲覧 / R 範囲 / T 地形 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
       </section>
     </aside>
   </main>
 
-  <script src="app.js?v=14"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

@@ -289,3 +289,43 @@ select { cursor: pointer; }
   .overlay.hint { top: auto; bottom: 8px; left: 8px; right: 56px; transform: none; max-width: none; font-size: 11px; padding: 4px 8px; text-align: left; }
   .overlay.legend { display: none; }
 }
+
+/* ---------- 閲覧モード ---------- */
+#map.mode-view { cursor: grab; }
+#map.mode-view #gLandmarks { pointer-events: auto; }
+#map.mode-view [data-station], #map.mode-view [data-line], #map.mode-view [data-landmark] { cursor: pointer; }
+#map .dim { opacity: 0.16; }
+body.view-on #btnTerminal, body.view-on #btnReverse, body.view-on #btnUndo, body.view-on #btnRedo,
+body.view-on .quick .sep, body.view-on .chip.add { display: none; }
+body.view-on.card-on .overlay.hint { display: none; }
+.view-card {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  width: min(440px, calc(100% - 28px)); max-height: 46%; overflow: auto; z-index: 4;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.22); padding: 12px 14px;
+}
+.view-card[hidden] { display: none; }
+.vc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.vc-title { font-size: 18px; font-weight: 800; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vc-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.vc-tag { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
+.vc-close { border: none; background: transparent; font-size: 20px; line-height: 1; padding: 2px 6px; }
+.vc-label { font-size: 11px; color: var(--muted); margin: 10px 0 4px; }
+.vc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.vc-chips button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 13px; }
+.vc-chips .badge { min-width: 20px; height: 20px; font-size: 11px; }
+.vc-route { display: flex; flex-direction: column; margin-top: 8px; }
+.vc-route button {
+  display: flex; align-items: center; gap: 10px; border: none; background: transparent;
+  padding: 3px 4px; text-align: left; font-size: 14px; position: relative;
+}
+.vc-route button i {
+  width: 12px; height: 12px; border-radius: 50%; border: 3px solid var(--lc); background: #fff; flex-shrink: 0;
+  position: relative; z-index: 1; box-sizing: content-box;
+}
+.vc-route button::before {
+  content: ""; position: absolute; left: 11px; width: 4px; top: 0; bottom: 0; background: var(--lc);
+}
+.vc-route button:first-child::before { top: 50%; }
+.vc-route button:last-child::before { bottom: 50%; }
+.vc-route button:hover { background: var(--surface-2); }

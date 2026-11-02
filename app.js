@@ -24,6 +24,7 @@
     landmark: 'タップでランドマークを配置 ／ ドラッグで移動 ／ ダブルタップで名前を編集',
   };
   const HINTS = {
+    view: '閲覧モード：タップで駅・路線の情報を表示 ／ ドラッグで移動・2本指やホイールで拡大縮小（編集はできません）',
     select: 'ダブルクリック（タップ）で駅を追加 ／ 駅をドラッグで移動（他の駅に重ねると乗換駅に統合）／ 背景ドラッグで範囲選択',
     range: 'ドラッグで範囲選択（Shiftで追加）／ 駅をタップで選択に追加・解除 ／ 選んだ駅はまとめて移動できます',
     station: 'ダブルクリック（タップ）で駅を追加 ／ 路線の上をダブルクリックするとその区間に駅を挿入',
@@ -68,6 +69,7 @@
   let lmIcon = 'temple';
   let modeBeforeTerrain = 'select';
   let pickTransferFrom = null; // 乗り換え相手を選んでいる駅
+  let viewSel = null; // 閲覧モードで見ている対象 {type:'station'|'line'|'landmark', id}
 
   // ---------- ユーティリティ ----------
   const uid = (p) => p + Math.random().toString(36).slice(2, 9);
@@ -808,14 +810,18 @@
     gLandmarks.setAttribute('font-family', FONT);
     const S = state.settings;
     bgRect.setAttribute('fill', S.bg);
-    gridRect.style.display = S.grid || mode === 'terrain' ? '' : 'none';
+    gridRect.style.display = (S.grid && mode !== 'view') || mode === 'terrain' ? '' : 'none';
+    // 閲覧モードで路線を見ているときは、他の路線・駅を薄くする
+    const focusLine = mode === 'view' && viewSel?.type === 'line' ? lineById(viewSel.id) : null;
+    const focusSt = focusLine ? new Set(focusLine.stations) : null;
+    const dim = (on) => (on ? ' class="dim"' : '');
 
     let lh = '', hh = '';
     for (let i = state.lines.length - 1; i >= 0; i--) {
       const ln = state.lines[i];
       const g = geom.lines.get(ln.id);
       if (!g.pts.length) continue;
-      lh += `<path d="${roundedPath(g.pts, 14)}" fill="none" stroke="${esc(ln.color)}" stroke-width="${ln.width}" stroke-linejoin="round" stroke-linecap="round"/>`;
+      lh += `<path${dim(focusLine && ln !== focusLine)} d="${roundedPath(g.pts, 14)}" fill="none" stroke="${esc(ln.color)}" stroke-width="${ln.width}" stroke-linejoin="round" stroke-linecap="round"/>`;
     }
     for (const ln of state.lines) {
       const g = geom.lines.get(ln.id);
@@ -828,9 +834,10 @@
 
     let sh = '', th = '';
     for (const st of Object.values(state.stations)) {
-      sh += `<g data-station="${esc(st.id)}">${stationMarkup(st)}</g>`;
+      const dd = dim(focusSt && !focusSt.has(st.id));
+      sh += `<g data-station="${esc(st.id)}"${dd}>${stationMarkup(st)}</g>`;
       const lab = labelMarkup(st);
-      if (lab) th += `<g data-station="${esc(st.id)}">${lab}</g>`;
+      if (lab) th += `<g data-station="${esc(st.id)}"${dd}>${lab}</g>`;
     }
     gStations.innerHTML = sh;
     $('#gTransfers').innerHTML = state.transfers.map((t) => {
@@ -867,6 +874,17 @@
 
   function renderSelection() {
     let under = '', over = '';
+    if (mode === 'view') {
+      if (viewSel?.type === 'station' && state.stations[viewSel.id]) {
+        const { p1, p2, R } = stationShape(state.stations[viewSel.id]);
+        over += `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="#f5a623" stroke-opacity="0.5" stroke-width="${r1(2 * R + 16)}" stroke-linecap="round" pointer-events="none"/>`;
+      } else if (viewSel?.type === 'landmark' && landmarkById(viewSel.id)) {
+        const l = landmarkById(viewSel.id);
+        over += `<circle cx="${r1(l.x)}" cy="${r1(l.y)}" r="${r1(14 * (state.settings.stationScale || 1) + 8)}" fill="#f5a623" fill-opacity="0.45" pointer-events="none"/>`;
+      }
+      gSelUnder.innerHTML = ''; gSelOver.innerHTML = over;
+      return;
+    }
     if (sel?.type === 'line') {
       const g = geom.lines.get(sel.id);
       const ln = lineById(sel.id);
@@ -926,7 +944,7 @@
       : '';
     const ln = activeLine();
     const n = selIds().length;
-    let hint = mode === 'line' ? (ln ? `【${ln.name}】 ` : '【新しい路線】 ') + HINTS.line : HINTS[mode];
+    let hint = mode === 'view' ? HINTS.view : mode === 'line' ? (ln ? `【${ln.name}】 ` : '【新しい路線】 ') + HINTS.line : HINTS[mode];
     if (mode === 'line' && sel?.type === 'line' && sel.seg && ln && sel.id === ln.id) {
       const [a, b] = sel.seg.split('|');
       if (state.stations[a] && state.stations[b]) hint = `【${ln.name}：${state.stations[a].name}–${state.stations[b].name} 間を選択中】ダブルクリックした場所を通るように曲げる ／ 別の駅間はタップで選び直し`;
@@ -967,6 +985,10 @@
 
   function renderInspector() {
     renderLineChips();
+    if (mode === 'view') {
+      inspector.innerHTML = '<h2>閲覧モード</h2><p class="muted">地図を見るためのモードです。編集はできません。駅・路線・ランドマークをタップすると情報が表示されます。編集に戻るときは「選択」などのツールを押してください。</p>';
+      return;
+    }
     const ids = selIds();
     if (ids.length === 1) return renderStationInspector(state.stations[ids[0]]);
     if (ids.length > 1) return renderMultiInspector(ids);
@@ -1183,13 +1205,17 @@
   function setMode(m) {
     if (m === 'terrain' && mode !== 'terrain') { modeBeforeTerrain = mode; sel = null; }
     if (m !== 'terrain' && sel?.type === 'landmark') sel = null;
+    if (m === 'view') { sel = null; pickTransferFrom = null; closeNameEditor(true, true); }
+    if (m !== 'view') viewSel = null;
     mode = m;
+    document.body.classList.toggle('view-on', m === 'view');
     document.body.classList.toggle('terrain-on', m === 'terrain');
     $('#logoTerrain')?.classList.toggle('on', m === 'terrain');
     $('#logoRoute')?.classList.toggle('on', m !== 'terrain');
     renderTerrainControls();
     document.querySelectorAll('.tools [data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
     svg.setAttribute('class', `mode-${m}`);
+    renderViewCard();
     if (m === 'line' && !activeLine() && state.lines.length) activeLineId = state.lines[0].id;
     renderMap();
     renderLineList();
@@ -1202,6 +1228,55 @@
     document.querySelectorAll('[data-cells]').forEach((b) => b.classList.toggle('active', Number(b.dataset.cells) === cellN));
     $('#lmPalette').innerHTML = LANDMARKS.map(([id, g, n]) => `<button class="lm-chip ${id === lmIcon ? 'active' : ''}" data-lmicon="${id}" title="${n}">${g}</button>`).join('');
   }
+
+  // ---------- 閲覧モードの情報カード ----------
+  function renderViewCard() {
+    const card = $('#viewCard');
+    if (!card) return;
+    const v = mode === 'view' ? viewSel : null;
+    let h = '';
+    const badge = (l) => `<span class="badge" style="background:${esc(l.color)}">${esc(l.code || l.name.slice(0, 1))}</span>`;
+    if (v?.type === 'station' && state.stations[v.id]) {
+      const st = state.stations[v.id];
+      const lns = state.lines.filter((l) => l.stations.includes(st.id));
+      const trs = transfersOf(st.id).map((t) => state.stations[t.a === st.id ? t.b : t.a]);
+      h = `<div class="vc-head"><div><div class="vc-title">${esc(st.name || '（名前なし）')}${st.terminal ? '<span class="vc-tag">ターミナル駅</span>' : ''}${lns.length >= 2 || trs.length ? '<span class="vc-tag">乗換駅</span>' : ''}</div>${st.sub ? `<div class="vc-sub">${esc(st.sub)}</div>` : ''}</div><button class="vc-close" data-vclose title="閉じる">×</button></div>`
+        + (lns.length ? `<div class="vc-label">乗り入れ路線</div><div class="vc-chips">${lns.map((l) => `<button data-vline="${esc(l.id)}">${badge(l)}${esc(l.name)}</button>`).join('')}</div>` : '<div class="vc-label">どの路線にも属していません</div>')
+        + (trs.length ? `<div class="vc-label">乗り換え（連絡通路）</div><div class="vc-chips">${trs.map((o) => `<button data-vst="${esc(o.id)}">⇄ ${esc(o.name)}</button>`).join('')}</div>` : '');
+    } else if (v?.type === 'line' && lineById(v.id)) {
+      const l = lineById(v.id);
+      const names = l.stations.map((id) => state.stations[id]).filter(Boolean);
+      h = `<div class="vc-head"><div><div class="vc-title">${badge(l)} ${esc(l.name)}</div><div class="vc-sub">${names.length}駅${l.loop ? '・環状線' : names.length > 1 ? `・${esc(names[0].name)} ⇔ ${esc(names[names.length - 1].name)}` : ''}</div></div><button class="vc-close" data-vclose title="閉じる">×</button></div>`
+        + `<div class="vc-route" style="--lc:${esc(l.color)}">${names.map((st) => `<button data-vst="${esc(st.id)}"><i></i>${esc(st.name)}</button>`).join('')}${l.loop && names.length ? `<button data-vst="${esc(names[0].id)}"><i></i>${esc(names[0].name)}</button>` : ''}</div>`;
+    } else if (v?.type === 'landmark' && landmarkById(v.id)) {
+      const l = landmarkById(v.id);
+      h = `<div class="vc-head"><div><div class="vc-title">${LM[l.icon]?.g || ''} ${esc(l.name || LM[l.icon]?.n || 'ランドマーク')}</div><div class="vc-sub">${esc(LM[l.icon]?.n || '')}</div></div><button class="vc-close" data-vclose title="閉じる">×</button></div>`;
+    }
+    card.innerHTML = h;
+    card.hidden = !h;
+    document.body.classList.toggle('card-on', !!h);
+  }
+
+  function focusStation(id) {
+    const st = state.stations[id];
+    if (!st) return;
+    viewSel = { type: 'station', id };
+    const r = svg.getBoundingClientRect();
+    view.x = r.width / 2 - st.x * view.k;
+    view.y = r.height * 0.4 - st.y * view.k;
+    applyView();
+    renderMap(); renderViewCard();
+  }
+
+  on('#viewCard', 'click', (e) => {
+    const t = e.target.closest('[data-vline],[data-vst],[data-vclose]');
+    if (!t) return;
+    if (t.dataset.vline) viewSel = { type: 'line', id: t.dataset.vline };
+    else if (t.dataset.vst) return focusStation(t.dataset.vst);
+    else viewSel = null;
+    renderMap(); renderViewCard();
+  });
+  on('#viewCard', 'pointerdown', (e) => e.stopPropagation());
 
   // ---------- 駅名のその場編集 ----------
   const editTarget = (ne) => (ne.kind === 'landmark' ? landmarkById(ne.id) : state.stations[ne.id]);
@@ -1348,6 +1423,15 @@
     const lnEl = e.target.closest('[data-line]');
 
     if (e.button === 1 || e.button === 2 || spaceDown) { drag = { type: 'pan', sp, orig: { ...view }, moved: false }; return; }
+
+    if (mode === 'view') {
+      const lmEl = e.target.closest('[data-landmark]');
+      const vtap = stEl ? { type: 'station', id: stEl.dataset.station }
+        : lnEl ? { type: 'line', id: lnEl.dataset.line }
+        : lmEl ? { type: 'landmark', id: lmEl.dataset.landmark } : null;
+      drag = { type: 'pan', sp, orig: { ...view }, moved: false, vtap: vtap || { type: null } };
+      return;
+    }
 
     if (mode === 'terrain') {
       const lmEl = e.target.closest('[data-landmark]');
@@ -1712,6 +1796,7 @@
     if (d.type === 'pan' && d.moved) { lastTap = null; return; }
     // 動かずに離した = タップ
     if (e.type !== 'pointerup') return;
+    if (d.vtap) { viewSel = d.vtap.type ? d.vtap : null; renderMap(); renderViewCard(); return; }
     if (d.tap?.kind === 'lm-place') { placeLandmark(d.tap.w); return; }
     if (d.tap && handleTap(d.tap, e)) return;
     if (d.clickDeselect && sel && !e.shiftKey && mode !== 'range') {
@@ -1785,6 +1870,7 @@
     const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
     if ((e.ctrlKey || e.metaKey) && !typing) {
       const k = e.key.toLowerCase();
+      if (mode === 'view' && k !== 's') return;
       if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
       if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
       if (k === 's') { e.preventDefault(); saveJSON(); return; }
@@ -1792,6 +1878,7 @@
     }
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.code === 'Space') { spaceDown = true; e.preventDefault(); return; }
+    if (mode === 'view' && ['Delete', 'Backspace', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
     const ids = selIds();
     const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     if (arrows[e.key] && ids.length) {
@@ -1802,6 +1889,7 @@
     }
     const k = e.key.toLowerCase();
     if (k === 'v') setMode('select');
+    else if (k === 'b') setMode('view');
     else if (k === 'r') setMode('range');
     else if (k === 't') setMode(mode === 'terrain' ? modeBeforeTerrain : 'terrain');
     else if (k === 's') setMode('station');
@@ -1831,6 +1919,7 @@
 
   on('#lineChips', 'click', (e) => {
     const c = e.target.closest('[data-chip]');
+    if (c && mode === 'view') { viewSel = { type: 'line', id: c.dataset.chip }; activeLineId = c.dataset.chip; renderMap(); renderLineChips(); renderViewCard(); return; }
     if (c) {
       activeLineId = c.dataset.chip;
       sel = { type: 'line', id: activeLineId, seg: null };

@@ -838,7 +838,8 @@
 
   function renderHandles() {
     const g = $('#gHandles');
-    const ln = mode === 'line' ? activeLine() : mode === 'select' && sel?.type === 'line' ? lineById(sel.id) : null;
+    // 経由点は「路線」ツールで、その路線を選んでいるときだけ表示する
+    const ln = mode === 'line' && sel?.type === 'line' ? lineById(sel.id) : null;
     if (!ln) { g.innerHTML = ''; return; }
     const keys = new Set(linePairs(ln).map(([p, q]) => segKey(p, q)));
     const sz = 7 / view.k;
@@ -905,7 +906,8 @@
     terrainVp.setAttribute('transform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     gridPat.setAttribute('patternTransform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     if (nameEdit) positionNameEditor();
-    if (sel?.type === 'line' && geom) renderHandles();
+    // 拡大縮小しても経由点の見た目の大きさが変わらないよう描き直す
+    if (geom) renderHandles();
   }
 
   function renderOverlays() {
@@ -1090,7 +1092,7 @@
         <div class="btn-row">
           ${['折れ線1', '折れ線2', '直線', '曲線'].map((t, i) => `<button class="small ${cur === i ? 'primary' : ''}" data-act="bend" data-bend="${i}">${t}</button>`).join('')}
         </div>
-        <span class="muted">経由点: ${nwp}個 ${nwp ? '<button class="small" data-act="wp-clear">経由点をすべて消す</button>' : ''}<br>線をドラッグすると経由点ができ、経路を自由に曲げられます。□をドラッグで移動、ダブルタップで削除。</span>
+        <span class="muted">経由点: ${nwp}個 ${nwp ? '<button class="small" data-act="wp-clear">経由点をすべて消す</button>' : ''}<br>「路線」ツールで線をタップして駅間を選び、ダブルタップした場所を通るように曲げられます（線をドラッグしてもOK）。□はドラッグで移動、ダブルタップで削除。</span>
       </div>`;
     })();
     inspector.innerHTML = `
@@ -1393,8 +1395,7 @@
         activeLineId = id;
         sel = { type: 'line', id, seg };
         renderAll();
-        // 線をドラッグすると経由点を作って経路を曲げる
-        drag = { type: 'waypoint', key: seg, idx: -1, sp, start: w, orig: [w.x, w.y], moved: false, tap: { kind: 'line', seg, sp, w } };
+        startBgDrag(e, sp, w, { tap: { kind: 'line', seg, sp, w } });
         return;
       }
       if (mode === 'line') {
@@ -1407,7 +1408,8 @@
           const [a, b] = seg.split('|');
           toast(`${state.stations[a].name}–${state.stations[b].name} 間を選択。ダブルクリックした場所を通るように曲げます`);
         }
-        drag = { type: 'pan', sp, orig: { ...view }, moved: false, tap: { kind: 'bg', sp, w } };
+        // 線をそのままドラッグしても、経由点を作って曲げられる
+        drag = { type: 'waypoint', key: seg, idx: -1, sp, start: w, orig: [w.x, w.y], moved: false, tap: { kind: 'bg', sp, w } };
         return;
       }
       // 範囲モードでは線の上も背景と同じ扱い

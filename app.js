@@ -2,16 +2,18 @@
 /* 路線図メーカー — 架空の路線図エディタ */
 (() => {
   // ---------- 定数 ----------
-  const GRID = 20;
   const STORE_KEY = 'rosenzu-maker-v1';
+  const PREFS_KEY = 'rosenzu-maker-prefs';
   const PALETTE = ['#e60012', '#0079c2', '#009944', '#f39800', '#9b7cb6', '#00a7db',
     '#d7c447', '#a0522d', '#e85298', '#6cbb5a', '#333333', '#1a237e'];
   const DIRS = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]];
   const DIR_ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
   const GRID_ORDER = [7, 0, 1, 6, -1, 2, 5, 4, 3]; // 3x3グリッドの並び(-1=自動)
   const FONT = '"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP","Yu Gothic",Meiryo,sans-serif';
+  const DOUBLE_TAP_MS = 350;
   const HINTS = {
-    select: '駅をドラッグで移動 ／ 背景ドラッグで画面移動 ／ 区間をダブルクリックで曲がり方を切替',
+    select: 'ダブルクリック（タップ）で駅を追加 ／ 駅をドラッグで移動（他の駅に重ねると乗換駅に統合）／ 背景ドラッグで範囲選択',
+    range: 'ドラッグで範囲選択（Shiftで追加）／ 駅をタップで選択に追加・解除 ／ 選んだ駅はまとめて移動できます',
     station: 'クリックで駅を追加 ／ 路線の上をクリックするとその区間に駅を挿入',
     line: '駅を順にクリックして路線を延長（Shift+クリックで起点側）／ 空白クリックで新駅を作成して延長',
     delete: '駅または路線をクリックして削除',
@@ -28,12 +30,14 @@
     gLabels = $('#gLabels'), gPreview = $('#gPreview'), gSelUnder = $('#gSelUnder'), gSelOver = $('#gSelOver');
   const inspector = $('#inspector');
   const lineList = $('#lineList');
+  const nameEditor = $('#nameEditor');
 
   // ---------- 状態 ----------
   let state;
+  let prefs;
   let view = { x: 0, y: 0, k: 1 };
   let mode = 'select';
-  let sel = null; // {type:'station', id} | {type:'line', id, seg}
+  let sel = null; // {type:'station', ids:[...]} | {type:'line', id, seg}
   let activeLineId = null;
   let undoStack = [], redoStack = [];
   let geom = null;
@@ -41,27 +45,51 @@
   let spaceDown = false;
   let editing = false;
   let cursorWorld = null;
+  let lastTap = null;
+  let nameEdit = null;
+  const pointers = new Map();
 
   // ---------- ユーティリティ ----------
   const uid = (p) => p + Math.random().toString(36).slice(2, 9);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const snap = (v) => Math.round(v / GRID) * GRID;
   const segKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
   const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
   const r1 = (v) => Math.round(v * 10) / 10;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const snap = (v, force) => (prefs.snap || force ? Math.round(v / prefs.gridSize) * prefs.gridSize : Math.round(v));
 
   function toast(msg) {
     const t = $('#toast');
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => t.classList.remove('show'), 1800);
+    toast.timer = setTimeout(() => t.classList.remove('show'), 2000);
+  }
+
+  // ---------- 操作設定(ブラウザごと) ----------
+  function defaultPrefs() {
+    return { snap: true, gridSize: 20, autoName: true, namePrefix: '新駅', bgDrag: 'auto', mergeOnDrop: true };
+  }
+  function loadPrefs() {
+    const p = defaultPrefs();
+    try {
+      const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+      if (typeof raw.snap === 'boolean') p.snap = raw.snap;
+      if ([10, 20, 40].includes(raw.gridSize)) p.gridSize = raw.gridSize;
+      if (typeof raw.autoName === 'boolean') p.autoName = raw.autoName;
+      if (typeof raw.namePrefix === 'string') p.namePrefix = raw.namePrefix.slice(0, 20);
+      if (['auto', 'select', 'pan'].includes(raw.bgDrag)) p.bgDrag = raw.bgDrag;
+      if (typeof raw.mergeOnDrop === 'boolean') p.mergeOnDrop = raw.mergeOnDrop;
+    } catch (_) { /* 無視 */ }
+    return p;
+  }
+  function savePrefs() {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (_) { /* 無視 */ }
   }
 
   // ---------- データ ----------
   function defaultSettings() {
-    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true };
+    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true, stationScale: 1 };
   }
 
   function emptyState() {
@@ -123,6 +151,7 @@
     }
     Object.assign(s.settings, raw.settings || {});
     s.settings.fontSize = clamp(Number(s.settings.fontSize) || 14, 8, 40);
+    s.settings.stationScale = clamp(Number(s.settings.stationScale) || 1, 0.5, 2);
     return s;
   }
 
@@ -150,14 +179,16 @@
   }
   function undo() {
     if (!undoStack.length) return;
+    closeNameEditor(true, true);
     redoStack.push(JSON.stringify(state));
-    state = JSON.parse(undoStack.pop());
+    state = normalize(JSON.parse(undoStack.pop()));
     afterHistory();
   }
   function redo() {
     if (!redoStack.length) return;
+    closeNameEditor(true, true);
     undoStack.push(JSON.stringify(state));
-    state = JSON.parse(redoStack.pop());
+    state = normalize(JSON.parse(redoStack.pop()));
     afterHistory();
   }
   function afterHistory() {
@@ -170,7 +201,10 @@
     $('#btnRedo').disabled = !redoStack.length;
   }
   function validateSelection() {
-    if (sel?.type === 'station' && !state.stations[sel.id]) sel = null;
+    if (sel?.type === 'station') {
+      sel.ids = sel.ids.filter((id) => state.stations[id]);
+      if (!sel.ids.length) sel = null;
+    }
     if (sel?.type === 'line' && !lineById(sel.id)) sel = null;
     if (activeLineId && !lineById(activeLineId)) activeLineId = null;
   }
@@ -180,19 +214,37 @@
     save();
   }
 
+  // ---------- 選択 ----------
+  const selIds = () => (sel?.type === 'station' ? sel.ids.filter((id) => state.stations[id]) : []);
+  function selectStations(ids) {
+    const u = [...new Set(ids)].filter((id) => state.stations[id]);
+    sel = u.length ? { type: 'station', ids: u } : null;
+  }
+  function toggleStation(id) {
+    const ids = selIds();
+    selectStations(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
+  }
+
   // ---------- 操作 ----------
   const lineById = (id) => state.lines.find((l) => l.id === id);
   const activeLine = () => lineById(activeLineId);
 
-  function stationAt(x, y) {
-    return Object.values(state.stations).find((s) => s.x === x && s.y === y);
+  function stationNear(x, y, excludeId) {
+    let best = null, bd = 6;
+    for (const s of Object.values(state.stations)) {
+      if (s.id === excludeId) continue;
+      const d = Math.hypot(s.x - x, s.y - y);
+      if (d <= bd) { bd = d; best = s; }
+    }
+    return best;
   }
 
   function nextStationName() {
+    const prefix = prefs.namePrefix || '新駅';
     const names = new Set(Object.values(state.stations).map((s) => s.name));
     let i = 1;
-    while (names.has(`新駅${i}`)) i++;
-    return `新駅${i}`;
+    while (names.has(`${prefix}${i}`)) i++;
+    return `${prefix}${i}`;
   }
 
   function createStation(x, y) {
@@ -213,14 +265,21 @@
     return ln;
   }
 
-  function deleteStation(id) {
-    delete state.stations[id];
+  function tidyLine(ln) {
+    ln.stations = ln.stations.filter((s, i, a) => i === 0 || a[i - 1] !== s);
+    if (ln.loop && ln.stations.length > 1 && ln.stations[0] === ln.stations[ln.stations.length - 1]) ln.stations.pop();
+    if (ln.stations.length < 3) ln.loop = false;
+  }
+
+  function deleteStations(ids) {
+    const set = new Set(ids);
+    for (const id of set) delete state.stations[id];
     for (const ln of state.lines) {
-      ln.stations = ln.stations.filter((s) => s !== id).filter((s, i, a) => i === 0 || a[i - 1] !== s);
-      if (ln.stations.length < 3) ln.loop = false;
+      ln.stations = ln.stations.filter((s) => !set.has(s));
+      tidyLine(ln);
     }
     cleanBends();
-    if (sel?.type === 'station' && sel.id === id) sel = null;
+    validateSelection();
   }
 
   function deleteLine(id) {
@@ -239,8 +298,21 @@
   function removeFromLine(lineId, stationId) {
     const ln = lineById(lineId);
     if (!ln) return;
-    ln.stations = ln.stations.filter((s) => s !== stationId).filter((s, i, a) => i === 0 || a[i - 1] !== s);
-    if (ln.stations.length < 3) ln.loop = false;
+    ln.stations = ln.stations.filter((s) => s !== stationId);
+    tidyLine(ln);
+    cleanBends();
+  }
+
+  /** fromId の駅を toId の駅に統合(乗換駅化) */
+  function mergeStations(fromId, toId) {
+    const from = state.stations[fromId], to = state.stations[toId];
+    if (!from || !to) return;
+    if (!to.sub && from.sub) to.sub = from.sub;
+    for (const ln of state.lines) {
+      ln.stations = ln.stations.map((s) => (s === fromId ? toId : s));
+      tidyLine(ln);
+    }
+    delete state.stations[fromId];
     cleanBends();
   }
 
@@ -266,7 +338,7 @@
     return true;
   }
 
-  /** 区間 a-b に新しい駅を挿入(その区間を通る全路線に) */
+  /** 区間 a-b に駅を挿入(その区間を通る全路線に) */
   function insertIntoSegment(key, station) {
     const [a, b] = key.split('|');
     for (const ln of state.lines) {
@@ -283,6 +355,18 @@
       }
     }
     delete state.bends[key];
+  }
+
+  /** 位置 w に駅を置く(線の上なら区間に挿入)。作成/既存の駅を返す。履歴は呼び出し側で */
+  function placeStation(w, seg) {
+    const x = snap(w.x), y = snap(w.y);
+    const existing = stationNear(x, y);
+    const st = existing || createStation(x, y);
+    if (seg) {
+      const [a, b] = seg.split('|');
+      if (st.id !== a && st.id !== b) insertIntoSegment(seg, st);
+    }
+    return { st, created: !existing };
   }
 
   // ---------- ジオメトリ ----------
@@ -399,18 +483,15 @@
       const pts = s.pts;
       const [p0, p1] = s.a === id ? [pts[0], pts[1]] : [pts[pts.length - 1], pts[pts.length - 2]];
       const ang = Math.atan2(p1[1] - p0[1], p1[0] - p0[0]);
-      // 0=上(-90deg) から時計回り
       const dir = ((Math.round((ang + Math.PI / 2) / (Math.PI / 4)) % 8) + 8) % 8;
       counts[dir] = 1;
       any = true;
     }
     if (!any) return 2;
-    // 線が通っていない方向のうち、上下左右を優先
     const pref = [0, 4, 2, 6, 1, 3, 5, 7];
     let best = pref[0], bestScore = -1;
     for (const d of pref) {
       if (counts[d]) continue;
-      // 隣接方向に線があるほど減点
       const score = 3 - counts[(d + 1) % 8] - counts[(d + 7) % 8] + (d % 2 === 0 ? 0.5 : 0);
       if (score > bestScore) { bestScore = score; best = d; }
     }
@@ -420,22 +501,7 @@
   // ---------- 描画 ----------
   function stationRadius(lns) {
     const w = lns.length ? Math.max(...lns.map((l) => l.width)) : 8;
-    return w * 0.55 + 2.5;
-  }
-
-  function stationMarkup(st) {
-    const lns = geom.stLines[st.id] || [];
-    const pts = geom.stPts[st.id] || [[st.x, st.y]];
-    const [p1, p2] = farthestPair(pts);
-    const R = stationRadius(lns);
-    const inter = lns.length >= 2;
-    const ring = inter ? '#222' : (lns[0]?.color || '#888');
-    const bw = inter ? 2.5 : Math.max(2, R * 0.5);
-    if (dist(p1, p2) < 0.5) {
-      return `<circle cx="${r1(p1[0])}" cy="${r1(p1[1])}" r="${r1(R)}" fill="#fff" stroke="${ring}" stroke-width="${r1(bw)}"/>`;
-    }
-    const line = (w, c) => `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="${c}" stroke-width="${r1(w)}" stroke-linecap="round"/>`;
-    return line(2 * R + bw, ring) + line(2 * R - bw, '#fff');
+    return (w * 0.55 + 2.5) * (state.settings.stationScale || 1);
   }
 
   function stationShape(st) {
@@ -443,6 +509,21 @@
     const [p1, p2] = farthestPair(pts);
     const R = stationRadius(geom.stLines[st.id] || []);
     return { p1, p2, R };
+  }
+
+  function stationMarkup(st) {
+    const lns = geom.stLines[st.id] || [];
+    const { p1, p2, R } = stationShape(st);
+    const inter = lns.length >= 2;
+    const ring = inter ? '#222' : (lns[0]?.color || '#888');
+    const bw = inter ? 2.5 : Math.max(2, R * 0.5);
+    // タッチしやすいように透明な当たり判定を少し大きめに
+    const hit = `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="transparent" stroke-width="${r1(2 * R + 14)}" stroke-linecap="round"/>`;
+    if (dist(p1, p2) < 0.5) {
+      return hit + `<circle cx="${r1(p1[0])}" cy="${r1(p1[1])}" r="${r1(R)}" fill="#fff" stroke="${ring}" stroke-width="${r1(bw)}"/>`;
+    }
+    const line = (w, c) => `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="${c}" stroke-width="${r1(w)}" stroke-linecap="round"/>`;
+    return hit + line(2 * R + bw, ring) + line(2 * R - bw, '#fff');
   }
 
   function labelMarkup(st) {
@@ -467,13 +548,19 @@
     return t;
   }
 
+  function applyGrid() {
+    const g = prefs.gridSize;
+    gridPat.setAttribute('width', g);
+    gridPat.setAttribute('height', g);
+    gridPat.querySelector('path').setAttribute('d', `M${g} 0H0V${g}`);
+  }
+
   function renderMap() {
     geom = computeGeom();
     const S = state.settings;
     bgRect.setAttribute('fill', S.bg);
     gridRect.style.display = S.grid ? '' : 'none';
 
-    // 路線(後ろの路線ほど下に描く)
     let lh = '', hh = '';
     for (let i = state.lines.length - 1; i >= 0; i--) {
       const ln = state.lines[i];
@@ -484,13 +571,12 @@
     for (const ln of state.lines) {
       const g = geom.lines.get(ln.id);
       for (const part of g.parts) {
-        hh += `<path data-line="${esc(ln.id)}" data-seg="${esc(part.key)}" d="${roundedPath(part.pts, 14)}" fill="none" stroke="transparent" stroke-width="${ln.width + 10}" stroke-linecap="round"/>`;
+        hh += `<path data-line="${esc(ln.id)}" data-seg="${esc(part.key)}" d="${roundedPath(part.pts, 14)}" fill="none" stroke="transparent" stroke-width="${ln.width + 12}" stroke-linecap="round"/>`;
       }
     }
     gLines.innerHTML = lh;
     gHits.innerHTML = hh;
 
-    // 駅
     let sh = '', th = '';
     for (const st of Object.values(state.stations)) {
       sh += `<g data-station="${esc(st.id)}">${stationMarkup(st)}</g>`;
@@ -501,7 +587,12 @@
     gLabels.innerHTML = th;
     gLabels.setAttribute('font-family', FONT);
 
-    // 選択表示
+    renderSelection();
+    renderPreview();
+    renderOverlays();
+  }
+
+  function renderSelection() {
     let under = '', over = '';
     if (sel?.type === 'line') {
       const g = geom.lines.get(sel.id);
@@ -511,14 +602,19 @@
         const part = g.parts.find((p) => p.key === sel.seg);
         if (part) over += `<path d="${roundedPath(part.pts, 14)}" fill="none" stroke="#1f6feb" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"/>`;
       }
-    } else if (sel?.type === 'station' && state.stations[sel.id]) {
-      const { p1, p2, R } = stationShape(state.stations[sel.id]);
-      over += `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="#1f6feb" stroke-opacity="0.35" stroke-width="${r1(2 * R + 14)}" stroke-linecap="round" pointer-events="none"/>`;
+    } else {
+      for (const id of selIds()) {
+        const { p1, p2, R } = stationShape(state.stations[id]);
+        over += `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="#1f6feb" stroke-opacity="0.35" stroke-width="${r1(2 * R + 14)}" stroke-linecap="round" pointer-events="none"/>`;
+      }
+    }
+    if (drag?.type === 'marquee' && drag.moved) {
+      const x = Math.min(drag.start.x, drag.cur.x), y = Math.min(drag.start.y, drag.cur.y);
+      const w = Math.abs(drag.cur.x - drag.start.x), h = Math.abs(drag.cur.y - drag.start.y);
+      over += `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(w)}" height="${r1(h)}" fill="#1f6feb" fill-opacity="0.08" stroke="#1f6feb" stroke-width="${r1(1.5 / view.k)}" stroke-dasharray="${r1(6 / view.k)} ${r1(4 / view.k)}" pointer-events="none"/>`;
     }
     gSelUnder.innerHTML = under;
     gSelOver.innerHTML = over;
-    renderPreview();
-    renderOverlays();
   }
 
   function renderPreview() {
@@ -533,6 +629,7 @@
   function applyView() {
     vp.setAttribute('transform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     gridPat.setAttribute('patternTransform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
+    if (nameEdit) positionNameEditor();
   }
 
   function renderOverlays() {
@@ -543,9 +640,10 @@
       ? items.map((l) => `<div class="legend-item">${l.code ? `<span class="badge" style="background:${esc(l.color)}">${esc(l.code)}</span>` : ''}<span class="bar" style="background:${esc(l.color)}"></span><span>${esc(l.name)}</span></div>`).join('')
       : '';
     const ln = activeLine();
-    $('#hint').textContent = mode === 'line'
-      ? (ln ? `【${ln.name}】 ` : '【新しい路線】 ') + HINTS.line
-      : HINTS[mode];
+    const n = selIds().length;
+    let hint = mode === 'line' ? (ln ? `【${ln.name}】 ` : '【新しい路線】 ') + HINTS.line : HINTS[mode];
+    if (n > 1 && (mode === 'select' || mode === 'range')) hint = `${n}駅を選択中 ／ ドラッグでまとめて移動・矢印キーで微調整・Deleteで削除`;
+    $('#hint').textContent = hint;
   }
 
   function renderLineList() {
@@ -562,25 +660,28 @@
   }
 
   function renderInspector() {
-    if (sel?.type === 'station' && state.stations[sel.id]) return renderStationInspector(state.stations[sel.id]);
+    const ids = selIds();
+    if (ids.length === 1) return renderStationInspector(state.stations[ids[0]]);
+    if (ids.length > 1) return renderMultiInspector(ids);
     if (sel?.type === 'line' && lineById(sel.id)) return renderLineInspector(lineById(sel.id));
-    inspector.innerHTML = '<h2>選択中</h2><p class="muted">駅や路線をクリックすると、ここで名前や色などを編集できます。</p>';
+    inspector.innerHTML = '<h2>選択中</h2><p class="muted">駅や路線をクリックすると、ここで名前や色などを編集できます。背景をドラッグ（スマホは「範囲」ツール）すると複数の駅をまとめて選択できます。</p>';
+  }
+
+  function dirGrid(current, auto) {
+    return `<div class="dir-grid">${GRID_ORDER.map((d) => d === -1
+      ? `<button data-act="label" data-dir="-1" class="${current === -1 ? 'on' : ''}" title="自動">自動</button>`
+      : `<button data-act="label" data-dir="${d}" class="${current === d ? 'on' : ''} ${d === auto ? 'auto' : ''}" title="${d === auto ? '自動で選ばれている位置' : ''}">${DIR_ARROWS[d]}</button>`).join('')}</div>`;
   }
 
   function renderStationInspector(st) {
     const lns = state.lines.filter((l) => l.stations.includes(st.id));
     const auto = st.label < 0 ? autoLabelDir(st.id) : -2;
+    const terminals = state.lines.filter((l) => !l.loop && l.stations.length && (l.stations[0] === st.id || l.stations[l.stations.length - 1] === st.id));
     inspector.innerHTML = `
       <h2>駅</h2>
       <label class="field">駅名 <input type="text" data-field="name" value="${esc(st.name)}" maxlength="40"></label>
       <label class="field">副駅名（英字・読みなど） <input type="text" data-field="sub" value="${esc(st.sub)}" maxlength="60"></label>
-      <div class="field">駅名の位置
-        <div class="dir-grid">
-          ${GRID_ORDER.map((d) => d === -1
-            ? `<button data-act="label" data-dir="-1" class="${st.label === -1 ? 'on' : ''}" title="自動">自動</button>`
-            : `<button data-act="label" data-dir="${d}" class="${st.label === d ? 'on' : ''}" title="${d === auto ? '自動で選ばれている位置' : ''}" ${d === auto ? 'style="outline:1px dashed var(--accent)"' : ''}>${DIR_ARROWS[d]}</button>`).join('')}
-        </div>
-      </div>
+      <div class="field">駅名の位置 ${dirGrid(st.label, auto)}</div>
       <div class="field">所属路線
         ${lns.length ? `<ul class="st-list">${lns.map((l) => `
           <li><span class="badge" style="background:${esc(l.color)}">${esc(l.code || '　')}</span>
@@ -588,8 +689,47 @@
           <button data-act="remove-from-line" data-id="${esc(l.id)}" title="この路線から外す">外す</button></li>`).join('')}</ul>`
         : '<span class="muted">どの路線にも属していません</span>'}
       </div>
-      <p class="muted">座標: (${st.x}, ${st.y})</p>
-      <div class="btn-row"><button class="danger" data-act="delete-station">この駅を削除</button></div>`;
+      <div class="field">この駅から
+        <div class="btn-row">
+          ${terminals.map((l) => `<button class="small" data-act="extend-from" data-id="${esc(l.id)}"><span class="dot" style="background:${esc(l.color)}"></span>${esc(l.name)}を延長</button>`).join('')}
+          <button class="small primary" data-act="new-line-from">＋ 新しい路線を始める</button>
+        </div>
+      </div>
+      <div class="field">位置
+        <div class="row">
+          <label class="field">X <input type="number" data-field="x" value="${st.x}" step="${prefs.gridSize}"></label>
+          <label class="field">Y <input type="number" data-field="y" value="${st.y}" step="${prefs.gridSize}"></label>
+        </div>
+      </div>
+      <div class="btn-row"><button class="danger" data-act="delete-stations">この駅を削除</button></div>
+      <p class="muted">駅をドラッグして別の駅に重ねると、1つの乗換駅に統合されます。矢印キーで位置を微調整できます。</p>`;
+  }
+
+  function renderMultiInspector(ids) {
+    const labels = new Set(ids.map((id) => state.stations[id].label));
+    const cur = labels.size === 1 ? [...labels][0] : -2;
+    const names = ids.slice(0, 12).map((id) => esc(state.stations[id].name)).join('、') + (ids.length > 12 ? ' ほか' : '');
+    inspector.innerHTML = `
+      <h2>${ids.length}駅を選択中</h2>
+      <p class="muted">${names}</p>
+      <div class="field">整列
+        <div class="btn-row">
+          <button class="small" data-act="align-h" title="Y座標をそろえる">横一列にそろえる</button>
+          <button class="small" data-act="align-v" title="X座標をそろえる">縦一列にそろえる</button>
+          <button class="small" data-act="distribute" ${ids.length < 3 ? 'disabled' : ''}>等間隔に並べる</button>
+        </div>
+      </div>
+      <div class="field">駅名の位置（まとめて変更） ${dirGrid(cur, -2)}</div>
+      <div class="field">路線
+        <div class="btn-row">
+          <button class="small primary" data-act="line-from-selection" ${ids.length < 2 ? 'disabled' : ''}>選んだ駅で新しい路線を作る</button>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button data-act="clear-selection">選択解除</button>
+        <button class="danger" data-act="delete-stations">${ids.length}駅を削除</button>
+      </div>
+      <p class="muted">選んだ駅はどれか1つをドラッグするとまとめて移動できます（矢印キーでも移動可）。</p>`;
   }
 
   function renderLineInspector(ln) {
@@ -598,7 +738,7 @@
       const [a, b] = sel.seg.split('|');
       if (!state.stations[a] || !state.stations[b]) return '';
       const cur = state.bends[sel.seg] || 0;
-      return `<div class="field">選択区間: ${esc(state.stations[a].name)} – ${esc(state.stations[b].name)}
+      return `<div class="field">選択区間: ${esc(state.stations[a].name)} – ${esc(state.stations[b].name)} の曲がり方
         <div class="btn-row">
           ${['折れ方1', '折れ方2', '直線'].map((t, i) => `<button class="small ${cur === i ? 'primary' : ''}" data-act="bend" data-bend="${i}">${t}</button>`).join('')}
         </div></div>`;
@@ -631,6 +771,7 @@
       </div>
       <div class="btn-row">
         <button class="primary" data-act="draw-line">この路線を延長する</button>
+        <button data-act="select-line-stations" ${ln.stations.length ? '' : 'disabled'}>駅をすべて選択</button>
         <button data-act="reverse" ${ln.stations.length < 2 ? 'disabled' : ''}>向きを反転</button>
         <button data-act="up-order" title="重なる区間で内側/外側の順序を変える">描画順 ↑</button>
         <button data-act="down-order">描画順 ↓</button>
@@ -645,6 +786,13 @@
     $('#setFont').value = S.fontSize;
     $('#setGrid').checked = S.grid;
     $('#setLegend').checked = S.showLegend;
+    $('#setScale').value = S.stationScale;
+    $('#prefSnap').checked = prefs.snap;
+    $('#prefGrid').value = String(prefs.gridSize);
+    $('#prefAutoName').checked = prefs.autoName;
+    $('#prefPrefix').value = prefs.namePrefix;
+    $('#prefBgDrag').value = prefs.bgDrag;
+    $('#prefMerge').checked = prefs.mergeOnDrop;
   }
 
   function renderAll() {
@@ -664,15 +812,77 @@
     renderLineList();
   }
 
+  // ---------- 駅名のその場編集 ----------
+  function positionNameEditor() {
+    const st = state.stations[nameEdit.id];
+    if (!st) return;
+    const stage = $('#stage').getBoundingClientRect();
+    const bw = nameEditor.offsetWidth || 220, bh = nameEditor.offsetHeight || 90;
+    const sx = st.x * view.k + view.x, sy = st.y * view.k + view.y;
+    let top = sy + 22;
+    if (top + bh > stage.height - 8) top = sy - 22 - bh;
+    nameEditor.style.left = clamp(sx - bw / 2, 8, stage.width - bw - 8) + 'px';
+    nameEditor.style.top = clamp(top, 8, stage.height - bh - 8) + 'px';
+  }
+
+  function openNameEditor(id, isNew) {
+    const st = state.stations[id];
+    if (!st) return;
+    closeNameEditor(true);
+    nameEdit = { id, orig: { name: st.name, sub: st.sub }, pushed: false, isNew };
+    $('#neName').value = st.name;
+    $('#neSub').value = st.sub;
+    nameEditor.hidden = false;
+    positionNameEditor();
+    const inp = $('#neName');
+    inp.focus({ preventScroll: true });
+    inp.select();
+  }
+
+  function closeNameEditor(apply, silent) {
+    if (!nameEdit) return;
+    const ne = nameEdit;
+    nameEdit = null;
+    nameEditor.hidden = true;
+    const st = state.stations[ne.id];
+    if (!apply && st) {
+      st.name = ne.orig.name;
+      st.sub = ne.orig.sub;
+      if (ne.pushed) { undoStack.pop(); updateUndoButtons(); }
+    }
+    if (!silent) { renderMap(); renderInspector(); save(); }
+  }
+
+  nameEditor.addEventListener('input', (e) => {
+    if (!nameEdit) return;
+    const st = state.stations[nameEdit.id];
+    if (!st) return;
+    if (!nameEdit.pushed && !nameEdit.isNew) { pushUndo(); nameEdit.pushed = true; }
+    if (e.target.id === 'neName') st.name = e.target.value;
+    if (e.target.id === 'neSub') st.sub = e.target.value;
+    renderMap();
+  });
+  nameEditor.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); closeNameEditor(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeNameEditor(false); }
+    e.stopPropagation();
+  });
+  nameEditor.addEventListener('focusout', (e) => {
+    if (e.relatedTarget && nameEditor.contains(e.relatedTarget)) return;
+    setTimeout(() => { if (nameEdit && !nameEditor.contains(document.activeElement)) closeNameEditor(true); }, 0);
+  });
+  $('#neOk').addEventListener('click', () => closeNameEditor(true));
+  nameEditor.addEventListener('pointerdown', (e) => e.stopPropagation());
+
   // ---------- 表示操作 ----------
   function screenPoint(e) {
     const r = svg.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
-  function toWorld(e) {
-    const p = screenPoint(e);
+  function toWorldPt(p) {
     return { x: (p.x - view.x) / view.k, y: (p.y - view.y) / view.k };
   }
+  const toWorld = (e) => toWorldPt(screenPoint(e));
   function zoomAt(sx, sy, factor) {
     const k = clamp(view.k * factor, 0.15, 6);
     const wx = (sx - view.x) / view.k, wy = (sy - view.y) / view.k;
@@ -680,6 +890,7 @@
     view.x = sx - wx * k;
     view.y = sy - wy * k;
     applyView();
+    if (drag?.type === 'marquee') renderSelection();
   }
   function fitView() {
     const r = svg.getBoundingClientRect();
@@ -696,26 +907,68 @@
   }
 
   // ---------- ポインタ操作 ----------
+  /** 背景をドラッグしたときの動作 */
+  function bgDragKind(e) {
+    if (mode === 'range') return 'marquee';
+    if (e.shiftKey) return 'marquee';
+    if (prefs.bgDrag === 'select') return 'marquee';
+    if (prefs.bgDrag === 'pan') return 'pan';
+    return e.pointerType === 'touch' ? 'pan' : 'marquee';
+  }
+
+  function startBgDrag(e, sp, w, opts) {
+    const kind = bgDragKind(e);
+    if (kind === 'marquee') {
+      drag = { type: 'marquee', sp, start: w, cur: w, moved: false, add: e.shiftKey || mode === 'range', base: selIds(), ...opts };
+    } else {
+      drag = { type: 'pan', sp, orig: { ...view }, moved: false, ...opts };
+    }
+  }
+
+  function startPinch() {
+    const [a, b] = [...pointers.values()];
+    if (drag?.type === 'station' && drag.moved) finishStationDrag();
+    drag = {
+      type: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+      m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, v0: { ...view },
+    };
+    lastTap = null;
+  }
+
   svg.addEventListener('pointerdown', (e) => {
-    if (e.button === 2) return;
-    const w = toWorld(e);
+    if (nameEdit) closeNameEditor(true);
+    // 互換マウスイベントで直後に開く入力欄のフォーカスが外れないようにする
+    e.preventDefault();
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
     const sp = screenPoint(e);
+    pointers.set(e.pointerId, sp);
+    svg.setPointerCapture(e.pointerId);
+    if (pointers.size === 2 && e.pointerType === 'touch') { startPinch(); return; }
+    if (pointers.size > 1) return;
+
+    const w = toWorld(e);
     const stEl = e.target.closest('[data-station]');
     const lnEl = e.target.closest('[data-line]');
-    svg.setPointerCapture(e.pointerId);
 
-    if (e.button === 1 || spaceDown) { startPan(sp); return; }
+    if (e.button === 1 || e.button === 2 || spaceDown) { drag = { type: 'pan', sp, orig: { ...view }, moved: false }; return; }
 
     if (stEl) {
       const id = stEl.dataset.station;
-      if (mode === 'delete') { pushUndo(); deleteStation(id); commit(); return; }
+      if (mode === 'delete') { pushUndo(); deleteStations([id]); commit(); return; }
       if (mode === 'line') {
         if (extendLine(id, e.shiftKey)) commit();
         return;
       }
-      sel = { type: 'station', id };
-      const st = state.stations[id];
-      drag = { type: 'station', id, start: w, orig: { x: st.x, y: st.y }, moved: false };
+      const ids = selIds();
+      if (e.shiftKey || e.ctrlKey || e.metaKey || mode === 'range') {
+        toggleStation(id);
+        if (!selIds().includes(id)) { renderMap(); renderInspector(); return; }
+      } else if (!ids.includes(id)) {
+        selectStations([id]);
+      }
+      const origs = {};
+      for (const sid of selIds()) origs[sid] = { x: state.stations[sid].x, y: state.stations[sid].y };
+      drag = { type: 'station', anchor: id, start: w, origs, moved: false, tap: { kind: 'station', id, sp } };
       renderMap(); renderInspector();
       return;
     }
@@ -729,34 +982,33 @@
       }
       if (mode === 'station') {
         pushUndo();
-        const x = snap(w.x), y = snap(w.y);
-        const st = stationAt(x, y) || createStation(x, y);
-        const [a, b] = seg.split('|');
-        if (st.id !== a && st.id !== b) insertIntoSegment(seg, st);
-        sel = { type: 'station', id: st.id };
+        const { st, created } = placeStation(w, seg);
+        selectStations([st.id]);
         commit();
+        if (created && prefs.autoName) openNameEditor(st.id, true);
         return;
       }
       if (mode === 'select') {
         activeLineId = id;
         sel = { type: 'line', id, seg };
-        drag = { type: 'pan-or-click', sp, orig: { ...view }, moved: false };
         renderAll();
+        startBgDrag(e, sp, w, { tap: { kind: 'line', seg, sp, w } });
         return;
       }
-      // 路線モードでは他路線の上も背景と同じ扱い(新駅を作って延長)
+      // 路線/範囲モードでは線の上も背景と同じ扱い
     }
 
     // 背景
     if (mode === 'station' || mode === 'line') {
       const x = snap(w.x), y = snap(w.y);
-      const existing = stationAt(x, y);
+      const existing = stationNear(x, y);
       if (mode === 'station') {
-        if (existing) { sel = { type: 'station', id: existing.id }; renderAll(); return; }
+        if (existing) { selectStations([existing.id]); renderAll(); return; }
         pushUndo();
         const st = createStation(x, y);
-        sel = { type: 'station', id: st.id };
+        selectStations([st.id]);
         commit();
+        if (prefs.autoName) openNameEditor(st.id, true);
       } else {
         if (existing) { if (extendLine(existing.id, e.shiftKey)) commit(); return; }
         pushUndo();
@@ -769,66 +1021,145 @@
       }
       return;
     }
-    startPan(sp, true);
+    startBgDrag(e, sp, w, { clickDeselect: true, tap: { kind: 'bg', sp, w } });
   });
 
-  function startPan(sp, clickDeselect) {
-    drag = { type: 'pan-or-click', sp, orig: { ...view }, moved: false, clickDeselect };
-  }
-
   svg.addEventListener('pointermove', (e) => {
-    const w = toWorld(e);
+    const sp = screenPoint(e);
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, sp);
+    const w = toWorldPt(sp);
     cursorWorld = e.altKey ? { x: w.x, y: w.y } : { x: snap(w.x), y: snap(w.y) };
     if (!drag) { if (mode === 'line') renderPreview(); return; }
+
+    if (drag.type === 'pinch') {
+      if (pointers.size < 2) return;
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const k = clamp(drag.v0.k * d / drag.d0, 0.15, 6);
+      const wx = (drag.m0.x - drag.v0.x) / drag.v0.k, wy = (drag.m0.y - drag.v0.y) / drag.v0.k;
+      view.k = k; view.x = m.x - wx * k; view.y = m.y - wy * k;
+      applyView();
+      return;
+    }
+
+    const moved = Math.hypot(sp.x - (drag.sp?.x ?? sp.x), sp.y - (drag.sp?.y ?? sp.y)) >= 5;
+
     if (drag.type === 'station') {
-      const st = state.stations[drag.id];
-      if (!st) { drag = null; return; }
-      let nx = drag.orig.x + (w.x - drag.start.x), ny = drag.orig.y + (w.y - drag.start.y);
-      if (!e.altKey) { nx = snap(nx); ny = snap(ny); }
-      if (nx === st.x && ny === st.y) return;
+      const a = drag.origs[drag.anchor];
+      if (!a || !state.stations[drag.anchor]) { drag = null; return; }
+      if (!drag.moved && !moved && Math.hypot(w.x - drag.start.x, w.y - drag.start.y) * view.k < 5) return;
+      let nx = a.x + (w.x - drag.start.x), ny = a.y + (w.y - drag.start.y);
+      if (e.altKey) { nx = Math.round(nx); ny = Math.round(ny); } else { nx = snap(nx); ny = snap(ny); }
+      const dx = nx - a.x, dy = ny - a.y;
+      const cur = state.stations[drag.anchor];
+      if (cur.x === nx && cur.y === ny) { drag.moved = drag.moved || false; return; }
       if (!drag.moved) { pushUndo(); drag.moved = true; }
-      st.x = nx; st.y = ny;
+      for (const [id, o] of Object.entries(drag.origs)) {
+        const st = state.stations[id];
+        if (st) { st.x = o.x + dx; st.y = o.y + dy; }
+      }
       renderMap();
-    } else if (drag.type === 'pan-or-click') {
-      const sp = screenPoint(e);
-      const dx = sp.x - drag.sp.x, dy = sp.y - drag.sp.y;
-      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      // 重ねると統合されることを予告
+      if (prefs.mergeOnDrop && Object.keys(drag.origs).length === 1) {
+        const target = stationNear(nx, ny, drag.anchor);
+        $('#hint').textContent = target ? `離すと「${target.name}」に統合して乗換駅にします` : HINTS[mode];
+      }
+    } else if (drag.type === 'pan') {
+      if (!drag.moved && !moved) return;
       drag.moved = true;
       svg.classList.add('panning');
-      view.x = drag.orig.x + dx;
-      view.y = drag.orig.y + dy;
+      view.x = drag.orig.x + (sp.x - drag.sp.x);
+      view.y = drag.orig.y + (sp.y - drag.sp.y);
       applyView();
+    } else if (drag.type === 'marquee') {
+      if (!drag.moved && !moved) return;
+      drag.moved = true;
+      drag.cur = w;
+      const x0 = Math.min(drag.start.x, w.x), x1 = Math.max(drag.start.x, w.x);
+      const y0 = Math.min(drag.start.y, w.y), y1 = Math.max(drag.start.y, w.y);
+      const inside = Object.values(state.stations).filter((s) => s.x >= x0 && s.x <= x1 && s.y >= y0 && s.y <= y1).map((s) => s.id);
+      const prev = selIds().join(',');
+      selectStations(drag.add ? [...drag.base, ...inside] : inside);
+      renderSelection();
+      if (selIds().join(',') !== prev) { renderOverlays(); }
     }
   });
 
-  function endDrag() {
+  function finishStationDrag() {
+    const ids = Object.keys(drag.origs);
+    if (prefs.mergeOnDrop && ids.length === 1) {
+      const st = state.stations[ids[0]];
+      const target = st && stationNear(st.x, st.y, st.id);
+      if (target) {
+        mergeStations(st.id, target.id);
+        selectStations([target.id]);
+        toast(`「${st.name}」を「${target.name}」に統合しました（元に戻す で取り消し）`);
+      }
+    }
+    commit();
+  }
+
+  function handleTap(tap, e) {
+    const now = performance.now();
+    const key = tap.kind === 'station' ? 'st:' + tap.id : tap.kind === 'line' ? 'ln:' + tap.seg : 'bg';
+    if (lastTap && now - lastTap.t < DOUBLE_TAP_MS && lastTap.key === key &&
+      Math.hypot(tap.sp.x - lastTap.sp.x, tap.sp.y - lastTap.sp.y) < 24) {
+      lastTap = null;
+      onDoubleTap(tap, e);
+      return true;
+    }
+    lastTap = { t: now, key, sp: tap.sp };
+    return false;
+  }
+
+  function onDoubleTap(tap) {
+    if (tap.kind === 'station') { openNameEditor(tap.id); return; }
+    if (mode !== 'select') return;
+    pushUndo();
+    const { st, created } = placeStation(tap.w, tap.kind === 'line' ? tap.seg : null);
+    selectStations([st.id]);
+    commit();
+    if (created) {
+      toast(tap.kind === 'line' ? '区間に駅を挿入しました' : '駅を追加しました');
+      if (prefs.autoName) openNameEditor(st.id, true);
+    }
+  }
+
+  function endPointer(e) {
+    pointers.delete(e.pointerId);
     if (!drag) return;
-    if (drag.type === 'station' && drag.moved) { renderInspector(); save(); }
-    if (drag.type === 'pan-or-click' && !drag.moved && drag.clickDeselect && sel) {
+    if (drag.type === 'pinch') {
+      if (pointers.size < 2) drag = null;
+      return;
+    }
+    const d = drag;
+    drag = null;
+    svg.classList.remove('panning');
+    if (d.type === 'station') {
+      if (d.moved) { drag = d; finishStationDrag(); drag = null; renderOverlays(); }
+      else if (d.tap && e.type === 'pointerup') handleTap(d.tap, e);
+      return;
+    }
+    if (d.type === 'marquee' && d.moved) {
+      renderMap(); renderInspector();
+      const n = selIds().length;
+      if (n) toast(`${n}駅を選択しました`);
+      lastTap = null;
+      return;
+    }
+    if (d.type === 'pan' && d.moved) { lastTap = null; return; }
+    // 動かずに離した = タップ
+    if (e.type !== 'pointerup') return;
+    if (d.tap && handleTap(d.tap, e)) return;
+    if (d.clickDeselect && sel && !e.shiftKey && mode !== 'range') {
       sel = null;
       renderMap(); renderInspector();
     }
-    svg.classList.remove('panning');
-    drag = null;
   }
-  svg.addEventListener('pointerup', endDrag);
-  svg.addEventListener('pointercancel', endDrag);
+  svg.addEventListener('pointerup', endPointer);
+  svg.addEventListener('pointercancel', endPointer);
   svg.addEventListener('pointerleave', () => { if (!drag) { cursorWorld = null; renderPreview(); } });
-
-  svg.addEventListener('dblclick', (e) => {
-    const stEl = e.target.closest('[data-station]');
-    const lnEl = e.target.closest('[data-line]');
-    if (stEl && mode === 'select') {
-      const inp = inspector.querySelector('[data-field=name]');
-      if (inp) { inp.focus(); inp.select(); }
-    } else if (lnEl && mode === 'select') {
-      const key = lnEl.dataset.seg;
-      pushUndo();
-      const v = ((state.bends[key] || 0) + 1) % 3;
-      if (v) state.bends[key] = v; else delete state.bends[key];
-      commit();
-    }
-  });
 
   svg.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -839,6 +1170,53 @@
 
   svg.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  // ---------- 複数駅の操作 ----------
+  function nudge(ids, dx, dy) {
+    pushUndo();
+    for (const id of ids) { const s = state.stations[id]; s.x += dx; s.y += dy; }
+    commit();
+  }
+
+  function alignStations(ids, axis) {
+    const sts = ids.map((id) => state.stations[id]);
+    const avg = sts.reduce((a, s) => a + s[axis], 0) / sts.length;
+    const v = snap(avg, prefs.snap);
+    pushUndo();
+    for (const s of sts) s[axis] = v;
+    commit();
+  }
+
+  function principalAxis(sts) {
+    const xs = sts.map((s) => s.x), ys = sts.map((s) => s.y);
+    return Math.max(...xs) - Math.min(...xs) >= Math.max(...ys) - Math.min(...ys) ? 'x' : 'y';
+  }
+
+  function distributeStations(ids) {
+    const sts = ids.map((id) => state.stations[id]);
+    const ax = principalAxis(sts);
+    sts.sort((a, b) => a[ax] - b[ax]);
+    const first = sts[0], last = sts[sts.length - 1];
+    pushUndo();
+    sts.forEach((s, i) => {
+      const t = i / (sts.length - 1);
+      s.x = snap(first.x + (last.x - first.x) * t);
+      s.y = snap(first.y + (last.y - first.y) * t);
+    });
+    commit();
+  }
+
+  function lineFromSelection(ids) {
+    const sts = ids.map((id) => state.stations[id]);
+    const ax = principalAxis(sts);
+    sts.sort((a, b) => a[ax] - b[ax]);
+    pushUndo();
+    const ln = createLine();
+    ln.stations = sts.map((s) => s.id);
+    sel = { type: 'line', id: ln.id, seg: null };
+    commit();
+    toast(`「${ln.name}」を作成しました`);
+  }
+
   // ---------- キーボード ----------
   window.addEventListener('keydown', (e) => {
     const tag = e.target.tagName;
@@ -848,17 +1226,28 @@
       if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
       if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
       if (k === 's') { e.preventDefault(); saveJSON(); return; }
+      if (k === 'a') { e.preventDefault(); selectStations(Object.keys(state.stations)); renderMap(); renderInspector(); return; }
     }
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.code === 'Space') { spaceDown = true; e.preventDefault(); return; }
+    const ids = selIds();
+    const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    if (arrows[e.key] && ids.length) {
+      e.preventDefault();
+      const step = prefs.gridSize * (e.shiftKey ? 5 : 1);
+      nudge(ids, arrows[e.key][0] * step, arrows[e.key][1] * step);
+      return;
+    }
     const k = e.key.toLowerCase();
     if (k === 'v') setMode('select');
+    else if (k === 'r') setMode('range');
     else if (k === 's') setMode('station');
     else if (k === 'l') setMode('line');
     else if (k === 'd') setMode('delete');
+    else if (k === 'enter' && ids.length === 1) { e.preventDefault(); openNameEditor(ids[0]); }
     else if (k === 'escape') { sel = null; if (mode !== 'select') setMode('select'); renderMap(); renderInspector(); }
     else if (k === 'delete' || k === 'backspace') {
-      if (sel?.type === 'station') { pushUndo(); deleteStation(sel.id); commit(); }
+      if (ids.length) { pushUndo(); deleteStations(ids); commit(); }
       else if (sel?.type === 'line') {
         const ln = lineById(sel.id);
         if (ln && confirm(`路線「${ln.name}」を削除しますか？`)) { pushUndo(); deleteLine(ln.id); commit(); }
@@ -889,21 +1278,32 @@
     if (!editing) { pushUndo(); editing = true; }
   }
   inspector.addEventListener('focusout', () => { editing = false; });
-  inspector.addEventListener('change', () => { editing = false; });
+  inspector.addEventListener('change', (e) => {
+    editing = false;
+    if (e.target.dataset.field === 'x' || e.target.dataset.field === 'y') renderInspector();
+  });
 
   inspector.addEventListener('input', (e) => {
     const f = e.target.dataset.field;
     if (!f) return;
-    beginEdit();
-    if (sel?.type === 'station') {
-      const st = state.stations[sel.id];
-      if (!st) return;
-      if (f === 'name') st.name = e.target.value;
-      if (f === 'sub') st.sub = e.target.value;
+    const ids = selIds();
+    if (ids.length === 1) {
+      const st = state.stations[ids[0]];
+      if (f === 'x' || f === 'y') {
+        const v = Number(e.target.value);
+        if (!Number.isFinite(v) || e.target.value === '') return;
+        beginEdit();
+        st[f] = Math.round(v);
+      } else {
+        beginEdit();
+        if (f === 'name') st.name = e.target.value;
+        if (f === 'sub') st.sub = e.target.value;
+      }
       renderMap();
     } else if (sel?.type === 'line') {
       const ln = lineById(sel.id);
       if (!ln) return;
+      beginEdit();
       if (f === 'lname') ln.name = e.target.value;
       if (f === 'code') ln.code = e.target.value;
       if (f === 'color') ln.color = e.target.value;
@@ -919,13 +1319,38 @@
     const b = e.target.closest('[data-act]');
     if (!b || b.disabled) return;
     const act = b.dataset.act;
-    if (sel?.type === 'station') {
-      const st = state.stations[sel.id];
-      if (!st) return;
-      if (act === 'label') { pushUndo(); st.label = Number(b.dataset.dir); commit(); }
-      else if (act === 'remove-from-line') { pushUndo(); removeFromLine(b.dataset.id, st.id); commit(); }
+    const ids = selIds();
+    if (ids.length) {
+      if (act === 'label') {
+        pushUndo();
+        for (const id of ids) state.stations[id].label = Number(b.dataset.dir);
+        commit();
+      } else if (act === 'delete-stations') { pushUndo(); deleteStations(ids); commit(); }
+      else if (act === 'clear-selection') { sel = null; renderMap(); renderInspector(); }
+      else if (act === 'align-h') alignStations(ids, 'y');
+      else if (act === 'align-v') alignStations(ids, 'x');
+      else if (act === 'distribute') distributeStations(ids);
+      else if (act === 'line-from-selection') lineFromSelection(ids);
+      else if (act === 'remove-from-line') { pushUndo(); removeFromLine(b.dataset.id, ids[0]); commit(); }
       else if (act === 'goto-line') { activeLineId = b.dataset.id; sel = { type: 'line', id: b.dataset.id, seg: null }; renderAll(); }
-      else if (act === 'delete-station') { pushUndo(); deleteStation(st.id); commit(); }
+      else if (act === 'extend-from') {
+        const ln = lineById(b.dataset.id);
+        if (!ln) return;
+        if (ln.stations[0] === ids[0] && ln.stations[ln.stations.length - 1] !== ids[0]) { pushUndo(); ln.stations.reverse(); }
+        activeLineId = ln.id;
+        sel = { type: 'line', id: ln.id, seg: null };
+        setMode('line');
+        commit();
+        toast(`「${ln.name}」の延長先の駅をクリックしてください`);
+      } else if (act === 'new-line-from') {
+        pushUndo();
+        const ln = createLine();
+        ln.stations.push(ids[0]);
+        sel = { type: 'line', id: ln.id, seg: null };
+        setMode('line');
+        commit();
+        toast(`「${ln.name}」を作成しました。次の駅をクリックしてください`);
+      }
       return;
     }
     if (sel?.type === 'line') {
@@ -938,7 +1363,8 @@
         const v = Number(b.dataset.bend);
         if (v) state.bends[sel.seg] = v; else delete state.bends[sel.seg];
         commit();
-      } else if (act === 'goto-station') { sel = { type: 'station', id: b.dataset.id }; renderAll(); }
+      } else if (act === 'goto-station') { selectStations([b.dataset.id]); renderAll(); }
+      else if (act === 'select-line-stations') { selectStations(ln.stations); renderAll(); }
       else if (act === 'move') {
         const j = i + Number(b.dataset.d);
         if (j < 0 || j >= ln.stations.length) return;
@@ -949,8 +1375,7 @@
       } else if (act === 'remove-index') {
         pushUndo();
         ln.stations.splice(i, 1);
-        ln.stations = ln.stations.filter((s, k, a) => k === 0 || a[k - 1] !== s);
-        if (ln.stations.length < 3) ln.loop = false;
+        tidyLine(ln);
         cleanBends();
         commit();
       } else if (act === 'draw-line') { activeLineId = ln.id; setMode('line'); renderAll(); }
@@ -978,15 +1403,25 @@
       save();
     };
   }
-  ['#setTitle', '#setBg', '#setFont', '#setGrid', '#setLegend'].forEach((s) => {
+  ['#setTitle', '#setBg', '#setFont', '#setGrid', '#setLegend', '#setScale'].forEach((s) => {
     $(s).addEventListener('change', () => { settingsEditing.on = false; });
     $(s).addEventListener('blur', () => { settingsEditing.on = false; });
   });
   $('#setTitle').addEventListener('input', settingInput((t) => { state.settings.title = t.value; }));
   $('#setBg').addEventListener('input', settingInput((t) => { state.settings.bg = t.value; }));
   $('#setFont').addEventListener('input', settingInput((t) => { const v = Number(t.value); if (v >= 8 && v <= 40) state.settings.fontSize = v; }));
+  $('#setScale').addEventListener('input', settingInput((t) => { state.settings.stationScale = Number(t.value); }));
   $('#setGrid').addEventListener('input', settingInput((t) => { state.settings.grid = t.checked; settingsEditing.on = false; }));
   $('#setLegend').addEventListener('input', settingInput((t) => { state.settings.showLegend = t.checked; settingsEditing.on = false; }));
+
+  // 操作設定
+  $('#prefSnap').addEventListener('change', (e) => { prefs.snap = e.target.checked; savePrefs(); });
+  $('#prefGrid').addEventListener('change', (e) => { prefs.gridSize = Number(e.target.value); savePrefs(); applyGrid(); renderInspector(); });
+  $('#prefAutoName').addEventListener('change', (e) => { prefs.autoName = e.target.checked; savePrefs(); });
+  $('#prefPrefix').addEventListener('input', (e) => { prefs.namePrefix = e.target.value.slice(0, 20); savePrefs(); });
+  $('#prefBgDrag').addEventListener('change', (e) => { prefs.bgDrag = e.target.value; savePrefs(); });
+  $('#prefMerge').addEventListener('change', (e) => { prefs.mergeOnDrop = e.target.checked; savePrefs(); });
+  $('#prefReset').addEventListener('click', () => { prefs = defaultPrefs(); savePrefs(); applyGrid(); renderSettings(); toast('操作設定を初期値に戻しました'); });
 
   // ---------- ツールバー ----------
   document.querySelectorAll('.tools [data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
@@ -1092,11 +1527,13 @@
       });
     }
     const title = S.title ? `<text x="${pad}" y="${pad + 8}" font-size="26" font-weight="700" fill="#1d2330">${esc(S.title)}</text>` : '';
+    // 当たり判定用の透明な要素は書き出さない
+    const clean = (html) => html.replace(/<line[^>]*stroke="transparent"[^>]*\/>/g, '');
     return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family='${FONT}'>
 <rect width="100%" height="100%" fill="${esc(S.bg)}"/>
 ${title}
-<g transform="translate(${r1(tx)} ${r1(ty)})">${gLines.innerHTML}${gStations.innerHTML}${gLabels.innerHTML}</g>
+<g transform="translate(${r1(tx)} ${r1(ty)})">${gLines.innerHTML}${clean(gStations.innerHTML)}${gLabels.innerHTML}</g>
 ${legend}
 </svg>`;
   }
@@ -1135,13 +1572,15 @@ ${legend}
   });
 
   // ---------- 初期化 ----------
+  prefs = loadPrefs();
   state = load() || sampleState();
   activeLineId = state.lines[0]?.id ?? null;
+  applyGrid();
   setMode('select');
   renderAll();
   requestAnimationFrame(fitView);
   window.addEventListener('resize', () => applyView());
 
   // デバッグ/テスト用
-  window.__rosenzu = { get state() { return state; }, fitView };
+  window.__rosenzu = { get state() { return state; }, get sel() { return sel; }, get view() { return view; }, fitView };
 })();

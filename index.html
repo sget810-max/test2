@@ -20,6 +20,7 @@
 
     <div class="tools" role="toolbar" aria-label="ツール">
       <button data-mode="select" title="選択・移動 (V)"><span class="ico">↖</span><span>選択</span></button>
+      <button data-mode="range" title="範囲選択 (R)"><span class="ico">⬚</span><span>範囲</span></button>
       <button data-mode="station" title="駅を追加 (S)"><span class="ico">◎</span><span>駅</span></button>
       <button data-mode="line" title="路線を描く (L)"><span class="ico">〰</span><span>路線</span></button>
       <button data-mode="delete" title="削除 (D)"><span class="ico">✕</span><span>削除</span></button>
@@ -70,6 +71,11 @@
         <button id="zoomFit" title="全体を表示">⤢</button>
       </div>
       <div class="toast" id="toast"></div>
+      <div class="name-editor" id="nameEditor" hidden>
+        <input type="text" id="neName" placeholder="駅名" maxlength="40" aria-label="駅名">
+        <input type="text" id="neSub" placeholder="副駅名（英字・読み）" maxlength="60" aria-label="副駅名">
+        <div class="ne-foot"><span class="muted">Enterで確定 / Escで取消</span><button id="neOk" class="small primary">OK</button></div>
+      </div>
     </section>
 
     <aside class="sidebar">
@@ -92,19 +98,47 @@
           <label class="field">背景色 <input type="color" id="setBg"></label>
           <label class="field">文字サイズ <input type="number" id="setFont" min="8" max="40" step="1"></label>
         </div>
+        <label class="field">駅マークの大きさ
+          <input type="range" id="setScale" min="0.5" max="2" step="0.1">
+        </label>
         <label class="check"><input type="checkbox" id="setGrid"> グリッドを表示</label>
         <label class="check"><input type="checkbox" id="setLegend"> 凡例を表示</label>
+      </section>
+
+      <section class="panel">
+        <h2>操作設定 <span class="muted">（このブラウザに保存）</span></h2>
+        <label class="check"><input type="checkbox" id="prefSnap"> 駅をグリッドに吸着させる（Altキーで一時解除）</label>
+        <div class="row">
+          <label class="field">グリッド間隔
+            <select id="prefGrid"><option value="10">細かい (10)</option><option value="20">標準 (20)</option><option value="40">粗い (40)</option></select>
+          </label>
+          <label class="field">新しい駅の名前
+            <input type="text" id="prefPrefix" maxlength="20" placeholder="新駅">
+          </label>
+        </div>
+        <label class="field">背景をドラッグしたとき
+          <select id="prefBgDrag">
+            <option value="auto">自動（マウス: 範囲選択 / タッチ: 画面移動）</option>
+            <option value="select">範囲選択</option>
+            <option value="pan">画面移動</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="prefAutoName"> 駅を追加したらすぐ駅名を入力する</label>
+        <label class="check"><input type="checkbox" id="prefMerge"> 駅を別の駅に重ねたら統合する（乗換駅）</label>
+        <div class="btn-row"><button id="prefReset" class="small">初期設定に戻す</button></div>
       </section>
 
       <section class="panel help">
         <h2>使い方</h2>
         <ol>
-          <li><b>駅</b>ツールで地図をクリックして駅を置きます。路線の上をクリックすると、その区間に駅を挿入できます。</li>
+          <li>地図を<b>ダブルクリック（ダブルタップ）</b>すると駅を追加できます。路線の上なら、その区間に駅を挿入します。駅をダブルクリックすると駅名をその場で編集できます。</li>
+          <li><b>駅</b>ツールなら1回のクリックで駅を置けます。</li>
           <li><b>路線</b>ツールで駅を順にクリックすると、選択中の路線が延びます。空白をクリックすると新しい駅を作って延長します。<kbd>Shift</kbd>+クリックで起点側に追加、始発駅をクリックすると環状線になります。</li>
-          <li><b>選択</b>ツールで駅をドラッグして移動。区間を<b>ダブルクリック</b>すると曲がり方（2通りの折れ方／直線）を切り替えます。</li>
-          <li>ホイールで拡大縮小、背景ドラッグ（または<kbd>Space</kbd>+ドラッグ）で移動。</li>
+          <li><b>選択</b>ツールで駅をドラッグして移動。別の駅に重ねると1つの乗換駅に統合されます。区間をクリックすると、曲がり方（2通りの折れ方／直線）を選べます。</li>
+          <li><b>範囲選択</b>: 背景をドラッグ（スマホは<b>範囲</b>ツール）で複数の駅を選択。<kbd>Shift</kbd>+クリックで追加・解除。まとめて移動・整列・削除・路線化ができます。</li>
+          <li>ホイールまたは2本指で拡大縮小。右ドラッグ・<kbd>Space</kbd>+ドラッグ・タッチ操作で画面移動。</li>
         </ol>
-        <p class="muted">ショートカット: V 選択 / S 駅 / L 路線 / D 削除 / Delete 選択項目を削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
+        <p class="muted">ショートカット: V 選択 / R 範囲 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
       </section>
     </aside>
   </main>

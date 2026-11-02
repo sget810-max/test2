@@ -27,7 +27,7 @@
     select: 'ダブルクリック（タップ）で駅を追加 ／ 駅をドラッグで移動（他の駅に重ねると乗換駅に統合）／ 背景ドラッグで範囲選択',
     range: 'ドラッグで範囲選択（Shiftで追加）／ 駅をタップで選択に追加・解除 ／ 選んだ駅はまとめて移動できます',
     station: 'ダブルクリック（タップ）で駅を追加 ／ 路線の上をダブルクリックするとその区間に駅を挿入',
-    line: '駅をクリックで路線を延長（Shift+クリックで起点側）／ ダブルクリックした場所を通るように線路を曲げる（□はドラッグで移動・ダブルクリックで削除）',
+    line: '駅をクリックで路線を延長（Shift+クリックで起点側）／ 線をタップで駅間を選び、ダブルクリックした場所を通るように曲げる（□はドラッグで移動・ダブルクリックで削除）',
     delete: '駅または路線をクリックして削除',
   };
 
@@ -858,7 +858,10 @@
       if (g && ln) {
         under += `<path d="${roundedPath(g.pts, 14)}" fill="none" stroke="#1f6feb" stroke-opacity="0.28" stroke-width="${ln.width + 12}" stroke-linejoin="round" stroke-linecap="round"/>`;
         const part = g.parts.find((p) => p.key === sel.seg);
-        if (part) over += `<path d="${roundedPath(part.pts, 14)}" fill="none" stroke="#1f6feb" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"/>`;
+        if (part) {
+          over += `<path d="${roundedPath(part.pts, 14)}" fill="none" stroke="#1f6feb" stroke-opacity="0.45" stroke-width="${ln.width + 10}" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>`;
+          over += `<path d="${roundedPath(part.pts, 14)}" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"/>`;
+        }
       }
     } else if (sel?.type === 'landmark') {
       const l = landmarkById(sel.id);
@@ -913,6 +916,10 @@
     const ln = activeLine();
     const n = selIds().length;
     let hint = mode === 'line' ? (ln ? `【${ln.name}】 ` : '【新しい路線】 ') + HINTS.line : HINTS[mode];
+    if (mode === 'line' && sel?.type === 'line' && sel.seg && ln && sel.id === ln.id) {
+      const [a, b] = sel.seg.split('|');
+      if (state.stations[a] && state.stations[b]) hint = `【${ln.name}：${state.stations[a].name}–${state.stations[b].name} 間を選択中】ダブルクリックした場所を通るように曲げる ／ 別の駅間はタップで選び直し`;
+    }
     if (mode === 'terrain') hint = '【地形】' + TERRAIN_HINTS[terrainTool];
     if (n > 1 && (mode === 'select' || mode === 'range')) hint = `${n}駅を選択中 ／ ドラッグでまとめて移動・矢印キーで微調整・Deleteで削除`;
     $('#hint').textContent = hint;
@@ -1387,7 +1394,20 @@
         drag = { type: 'waypoint', key: seg, idx: -1, sp, start: w, orig: [w.x, w.y], moved: false, tap: { kind: 'line', seg, sp, w } };
         return;
       }
-      // 路線/範囲モードでは線の上も背景と同じ扱い
+      if (mode === 'line') {
+        // 線をタップ → その駅間を選択。次のダブルクリックでこの駅間を曲げる
+        const changed = !(sel?.type === 'line' && sel.id === id && sel.seg === seg);
+        activeLineId = id;
+        sel = { type: 'line', id, seg };
+        renderAll();
+        if (changed) {
+          const [a, b] = seg.split('|');
+          toast(`${state.stations[a].name}–${state.stations[b].name} 間を選択。ダブルクリックした場所を通るように曲げます`);
+        }
+        drag = { type: 'pan', sp, orig: { ...view }, moved: false, tap: { kind: 'bg', sp, w } };
+        return;
+      }
+      // 範囲モードでは線の上も背景と同じ扱い
     }
 
     // 背景（駅の作成はダブルクリックで行う）
@@ -1543,7 +1563,9 @@
     const pairs = ln ? linePairs(ln) : [];
     if (!pairs.length) { toast('経路を変えたい路線（2駅以上）を上の路線ボタンで選んでください'); return; }
     let bestKey = null, bd = Infinity;
-    for (const [p, q] of pairs) {
+    // タップで駅間を選んでいれば、その駅間を曲げる
+    if (sel?.type === 'line' && sel.id === ln.id && sel.seg && pairs.some(([p, q]) => segKey(p, q) === sel.seg)) bestKey = sel.seg;
+    if (!bestKey) for (const [p, q] of pairs) {
       const k = segKey(p, q);
       const pts = geom.segs.get(k)?.pts || [];
       for (let i = 0; i < pts.length - 1; i++) {

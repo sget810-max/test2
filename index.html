@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>路線図メーカー</title>
   <meta name="description" content="架空の鉄道路線図をブラウザで作成・保存・書き出しできるエディタ">
-  <link rel="stylesheet" href="style.css?v=15">
+  <link rel="stylesheet" href="style.css?v=16">
 </head>
 <body>
   <header class="topbar">
@@ -68,6 +68,8 @@
         <div class="line-chips" id="lineChips"></div>
       </div>
       <div class="q-terrain">
+        <button id="btnIsland" title="陸地と水域を入れ替える（周りを海にする）">🏝 島モード</button>
+        <span class="sep"></span>
         <div class="q-brush">
           <span class="q-label">一度に塗る</span>
           <div class="seg-toggle">
@@ -189,7 +191,7 @@
           <li><b>ターミナル駅</b>: 駅を選んで「🚉 ターミナル」を押すと、二重丸の駅になります。</li>
           <li><b>乗り換え駅</b>: 駅を選んで右の欄の「＋ 乗り換え駅を追加」を押し、つなぎたい駅をタップすると、離れた駅どうしが連絡通路でつながります（2駅を範囲選択して「この2駅を乗り換え駅にする」でも可）。</li>
                     <li><b>範囲選択</b>: 背景をドラッグ（スマホは<b>範囲</b>ツール）で複数の駅を選択。<kbd>Shift</kbd>+クリックで追加・解除。まとめて移動・整列・削除・路線化ができます。</li>
-          <li>左上の<b>地形ロゴ</b>（青い川の絵）で地形エディターに、<b>路線図ロゴ</b>で路線図エディターに切り替え。地形はすべてグリッドのマス目単位です。<b>水域</b>でマスをタップ・なぞって海・川・湖にし、<b>陸地</b>でマスを陸に戻します。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
+          <li>左上の<b>地形ロゴ</b>（青い川の絵）で地形エディターに、<b>路線図ロゴ</b>で路線図エディターに切り替え。地形はすべてグリッドのマス目単位です。<b>水域</b>でマスをタップ・なぞって海・川・湖にし、<b>陸地</b>でマスを陸に戻します。<b>🏝 島モード</b>で陸地と水域を入れ替えると、周りが海になり島を作りやすくなります。<b>ランドマーク</b>はタップで配置、ドラッグで移動、ダブルタップで名前を編集。地形の編集中は1本指で描き、2本指で画面を動かします。</li>
           <li>ホイールまたは2本指で拡大縮小。右ドラッグ・<kbd>Space</kbd>+ドラッグ・タッチ操作で画面移動。</li>
         </ol>
         <p class="muted">ショートカット: V 選択 / B 閲覧 / R 範囲 / T 地形 / S 駅 / L 路線 / D 削除 / Enter 駅名を編集 / 矢印キー 駅を移動（Shiftで大きく）/ Ctrl+A すべての駅を選択 / Delete 削除 / Ctrl+Z 元に戻す。<br>作業内容はブラウザに自動保存されます。</p>
@@ -197,6 +199,6 @@
     </aside>
   </main>
 
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=16"></script>
 </body>
 </html>

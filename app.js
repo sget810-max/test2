@@ -112,7 +112,7 @@
 
   // ---------- データ ----------
   function defaultSettings() {
-    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true, stationScale: 1, waterColor: '#a9d4f2' };
+    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true, stationScale: 1, waterColor: '#a9d4f2', island: false };
   }
 
   function emptyState() {
@@ -230,6 +230,7 @@
     }
     Object.assign(s.settings, raw.settings || {});
     s.settings.fontSize = clamp(Number(s.settings.fontSize) || 14, 8, 40);
+    s.settings.island = !!s.settings.island;
     s.settings.stationScale = clamp(Number(s.settings.stationScale) || 1, 0.5, 2);
     if (!/^#[0-9a-f]{6}$/i.test(s.settings.waterColor)) s.settings.waterColor = defaultSettings().waterColor;
     const T = raw.terrain || {};
@@ -809,7 +810,8 @@
     gLandmarks.innerHTML = state.terrain.landmarks.map(landmarkMarkup).join('');
     gLandmarks.setAttribute('font-family', FONT);
     const S = state.settings;
-    bgRect.setAttribute('fill', S.bg);
+    // 島モードでは何も塗っていない場所が海になる
+    bgRect.setAttribute('fill', S.island ? S.waterColor : S.bg);
     gridRect.style.display = (S.grid && mode !== 'view') || mode === 'terrain' ? '' : 'none';
     // 閲覧モードで路線を見ているときは、他の路線・駅を薄くする
     const focusLine = mode === 'view' && viewSel?.type === 'line' ? lineById(viewSel.id) : null;
@@ -1082,6 +1084,10 @@
         <label class="field">水の色 <input type="color" data-field="water" value="${esc(state.settings.waterColor)}"></label>
         <label class="field">陸地の色 <input type="color" data-field="land" value="${esc(state.settings.bg)}"></label>
       </div>
+      <div class="field">島モード
+        <div class="btn-row"><button class="small ${state.settings.island ? 'primary' : ''}" data-act="island">🏝 島モード: ${state.settings.island ? 'オン' : 'オフ'}</button></div>
+        <span class="muted">オンにすると陸地と水域が入れ替わり、何も塗っていない場所が海になります。島や半島を作るときに便利です。</span>
+      </div>
       <p class="muted">塗り: ${n}件 ／ ランドマーク: ${m}件</p>
       <div class="btn-row">
         <button class="danger small" data-act="terrain-clear-shapes" ${n ? '' : 'disabled'}>水域・陸地をすべて消す</button>
@@ -1222,7 +1228,18 @@
     renderInspector();
   }
 
+  /** 島モード: 陸地と水域を入れ替える（何も塗っていない場所が海になる） */
+  function toggleIsland() {
+    pushUndo();
+    for (const sh of state.terrain.shapes) sh.t = sh.t === 'water' ? 'land' : 'water';
+    state.settings.island = !state.settings.island;
+    commit();
+    renderTerrainControls();
+    toast(state.settings.island ? '🏝 島モード：陸地と水域を入れ替えました（周りが海になります）' : '島モードを解除しました');
+  }
+
   function renderTerrainControls() {
+    $('#btnIsland')?.classList.toggle('active', !!state?.settings?.island);
     document.body.classList.toggle('tt-landmark', terrainTool === 'landmark');
     document.querySelectorAll('[data-ttool]').forEach((b) => b.classList.toggle('active', b.dataset.ttool === terrainTool));
     document.querySelectorAll('[data-cells]').forEach((b) => b.classList.toggle('active', Number(b.dataset.cells) === cellN));
@@ -1267,6 +1284,8 @@
     applyView();
     renderMap(); renderViewCard();
   }
+
+  on('#btnIsland', 'click', () => toggleIsland());
 
   on('#viewCard', 'click', (e) => {
     const t = e.target.closest('[data-vline],[data-vst],[data-vclose]');
@@ -2082,6 +2101,7 @@
       else if (act === 'lm-delete') { pushUndo(); state.terrain.landmarks = state.terrain.landmarks.filter((x) => x.id !== l.id); sel = null; commit(); }
       return;
     }
+    if (act === 'island') { toggleIsland(); return; }
     if (act === 'terrain-clear-shapes' && confirm('水域・陸地の塗りをすべて消しますか？')) { pushUndo(); state.terrain.shapes = []; commit(); return; }
     if (act === 'terrain-clear-landmarks' && confirm('ランドマークをすべて消しますか？')) { pushUndo(); state.terrain.landmarks = []; sel = null; commit(); return; }
     if (sel?.type === 'line') {
@@ -2304,7 +2324,7 @@
     const clean = (html) => html.replace(/<line[^>]*stroke="transparent"[^>]*\/>/g, '');
     return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family='${FONT}'>
-<rect width="100%" height="100%" fill="${esc(S.bg)}"/>
+<rect width="100%" height="100%" fill="${esc(S.island ? S.waterColor : S.bg)}"/>
 ${title}
 <g transform="translate(${r1(tx)} ${r1(ty)})">${gTerrain.innerHTML}${gLines.innerHTML}${$('#gTransfers').innerHTML}<g font-family='${FONT}'>${gLandmarks.innerHTML.replace(/<circle r="[^"]*" fill="transparent"\/>/g, '')}</g>${clean(gStations.innerHTML)}${gLabels.innerHTML}</g>
 ${legend}

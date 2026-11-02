@@ -329,3 +329,4 @@ body.view-on.card-on .overlay.hint { display: none; }
 .vc-route button:first-child::before { top: 50%; }
 .vc-route button:last-child::before { bottom: 50%; }
 .vc-route button:hover { background: var(--surface-2); }
+#btnIsland.active { background: #0b8fd6; border-color: #0b8fd6; color: #fff; }

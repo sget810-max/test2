@@ -33,6 +33,8 @@
 
   // ---------- DOM ----------
   const $ = (s) => document.querySelector(s);
+  // 要素が見つからなくても(古い画面がキャッシュに残っている等)全体が止まらないようにする
+  const on = (sel, ev, fn, opt) => { const el = $(sel); if (el) el.addEventListener(ev, fn, opt); };
   const svg = $('#map');
   const vp = $('#viewport');
   const gridRect = $('#gridRect');
@@ -1161,8 +1163,8 @@
     if (m !== 'terrain' && sel?.type === 'landmark') sel = null;
     mode = m;
     document.body.classList.toggle('terrain-on', m === 'terrain');
-    $('#logoTerrain').classList.toggle('on', m === 'terrain');
-    $('#logoRoute').classList.toggle('on', m !== 'terrain');
+    $('#logoTerrain')?.classList.toggle('on', m === 'terrain');
+    $('#logoRoute')?.classList.toggle('on', m !== 'terrain');
     renderTerrainControls();
     document.querySelectorAll('.tools [data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
     svg.setAttribute('class', `mode-${m}`);
@@ -1241,7 +1243,7 @@
     if (e.relatedTarget && nameEditor.contains(e.relatedTarget)) return;
     setTimeout(() => { if (nameEdit && !nameEditor.contains(document.activeElement)) closeNameEditor(true); }, 0);
   });
-  $('#neOk').addEventListener('click', () => closeNameEditor(true));
+  on('#neOk', 'click', () => closeNameEditor(true));
   nameEditor.addEventListener('pointerdown', (e) => e.stopPropagation());
 
   // ---------- 表示操作 ----------
@@ -1792,7 +1794,7 @@
     renderAll();
   });
 
-  $('#lineChips').addEventListener('click', (e) => {
+  on('#lineChips', 'click', (e) => {
     const c = e.target.closest('[data-chip]');
     if (c) {
       activeLineId = c.dataset.chip;
@@ -1805,7 +1807,7 @@
     if (e.target.closest('[data-chip-add]')) $('#btnAddLine').click();
   });
 
-  $('#btnTerminal').addEventListener('click', () => {
+  on('#btnTerminal', 'click', () => {
     const ids = selIds();
     if (!ids.length) { toast('ターミナル駅にしたい駅を選んでください'); return; }
     const on = !ids.every((id) => state.stations[id].terminal);
@@ -1815,7 +1817,7 @@
     toast(on ? 'ターミナル駅にしました' : '普通駅に戻しました');
   });
 
-  $('#btnReverse').addEventListener('click', () => {
+  on('#btnReverse', 'click', () => {
     const ln = activeLine();
     if (!ln || ln.stations.length < 2) return;
     pushUndo();
@@ -1824,7 +1826,7 @@
     toast(`「${ln.name}」の向きを反転しました`);
   });
 
-  $('#btnAddLine').addEventListener('click', () => {
+  on('#btnAddLine', 'click', () => {
     pushUndo();
     const ln = createLine();
     sel = { type: 'line', id: ln.id, seg: null };
@@ -2011,27 +2013,27 @@
     $(s).addEventListener('change', () => { settingsEditing.on = false; });
     $(s).addEventListener('blur', () => { settingsEditing.on = false; });
   });
-  $('#setTitle').addEventListener('input', settingInput((t) => { state.settings.title = t.value; }));
-  $('#setBg').addEventListener('input', settingInput((t) => { state.settings.bg = t.value; }));
-  $('#setWater').addEventListener('input', settingInput((t) => { state.settings.waterColor = t.value; }));
-  $('#setFont').addEventListener('input', settingInput((t) => { const v = Number(t.value); if (v >= 8 && v <= 40) state.settings.fontSize = v; }));
-  $('#setScale').addEventListener('input', settingInput((t) => { state.settings.stationScale = Number(t.value); }));
-  $('#setGrid').addEventListener('input', settingInput((t) => { state.settings.grid = t.checked; settingsEditing.on = false; }));
-  $('#setLegend').addEventListener('input', settingInput((t) => { state.settings.showLegend = t.checked; settingsEditing.on = false; }));
+  on('#setTitle', 'input', settingInput((t) => { state.settings.title = t.value; }));
+  on('#setBg', 'input', settingInput((t) => { state.settings.bg = t.value; }));
+  on('#setWater', 'input', settingInput((t) => { state.settings.waterColor = t.value; }));
+  on('#setFont', 'input', settingInput((t) => { const v = Number(t.value); if (v >= 8 && v <= 40) state.settings.fontSize = v; }));
+  on('#setScale', 'input', settingInput((t) => { state.settings.stationScale = Number(t.value); }));
+  on('#setGrid', 'input', settingInput((t) => { state.settings.grid = t.checked; settingsEditing.on = false; }));
+  on('#setLegend', 'input', settingInput((t) => { state.settings.showLegend = t.checked; settingsEditing.on = false; }));
 
   // 操作設定
-  $('#prefGrid').addEventListener('change', (e) => { prefs.gridSize = Number(e.target.value); savePrefs(); applyGrid(); renderInspector(); });
-  $('#prefAutoName').addEventListener('change', (e) => { prefs.autoName = e.target.checked; savePrefs(); });
-  $('#prefPrefix').addEventListener('input', (e) => { prefs.namePrefix = e.target.value.slice(0, 20); savePrefs(); });
-  $('#prefBgDrag').addEventListener('change', (e) => { prefs.bgDrag = e.target.value; savePrefs(); });
-  $('#prefMerge').addEventListener('change', (e) => { prefs.mergeOnDrop = e.target.checked; savePrefs(); });
-  $('#prefReset').addEventListener('click', () => { prefs = defaultPrefs(); savePrefs(); applyGrid(); renderSettings(); toast('操作設定を初期値に戻しました'); });
+  on('#prefGrid', 'change', (e) => { prefs.gridSize = Number(e.target.value); savePrefs(); applyGrid(); renderInspector(); });
+  on('#prefAutoName', 'change', (e) => { prefs.autoName = e.target.checked; savePrefs(); });
+  on('#prefPrefix', 'input', (e) => { prefs.namePrefix = e.target.value.slice(0, 20); savePrefs(); });
+  on('#prefBgDrag', 'change', (e) => { prefs.bgDrag = e.target.value; savePrefs(); });
+  on('#prefMerge', 'change', (e) => { prefs.mergeOnDrop = e.target.checked; savePrefs(); });
+  on('#prefReset', 'click', () => { prefs = defaultPrefs(); savePrefs(); applyGrid(); renderSettings(); toast('操作設定を初期値に戻しました'); });
 
   // ---------- ツールバー ----------
   document.querySelectorAll('.tools [data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-  $('#logoTerrain').addEventListener('click', () => { if (mode !== 'terrain') { setMode('terrain'); toast('地形エディター'); } });
-  $('#logoRoute').addEventListener('click', () => { if (mode === 'terrain') { setMode(modeBeforeTerrain === 'terrain' ? 'select' : modeBeforeTerrain); toast('路線図エディター'); } });
-  $('#btnTerrainDone').addEventListener('click', () => setMode(modeBeforeTerrain === 'terrain' ? 'select' : modeBeforeTerrain));
+  on('#logoTerrain', 'click', () => { if (mode !== 'terrain') { setMode('terrain'); toast('地形エディター'); } });
+  on('#logoRoute', 'click', () => { if (mode === 'terrain') { setMode(modeBeforeTerrain === 'terrain' ? 'select' : modeBeforeTerrain); toast('路線図エディター'); } });
+  on('#btnTerrainDone', 'click', () => setMode(modeBeforeTerrain === 'terrain' ? 'select' : modeBeforeTerrain));
   document.querySelectorAll('[data-ttool]').forEach((b) => b.addEventListener('click', () => {
     terrainTool = b.dataset.ttool;
     if (sel?.type === 'landmark' && terrainTool !== 'landmark') sel = null;
@@ -2040,7 +2042,7 @@
   document.querySelectorAll('[data-cells]').forEach((b) => b.addEventListener('click', () => {
     cellN = Number(b.dataset.cells); renderTerrainControls();
   }));
-  $('#lmPalette').addEventListener('click', (e) => {
+  on('#lmPalette', 'click', (e) => {
     const c = e.target.closest('[data-lmicon]');
     if (!c) return;
     lmIcon = c.dataset.lmicon;
@@ -2048,13 +2050,13 @@
     if (l && l.icon !== lmIcon) { pushUndo(); l.icon = lmIcon; commit(); }
     renderTerrainControls();
   });
-  $('#btnUndo').addEventListener('click', undo);
-  $('#btnRedo').addEventListener('click', redo);
-  $('#zoomIn').addEventListener('click', () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.25); });
-  $('#zoomOut').addEventListener('click', () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 0.8); });
-  $('#zoomFit').addEventListener('click', fitView);
+  on('#btnUndo', 'click', undo);
+  on('#btnRedo', 'click', redo);
+  on('#zoomIn', 'click', () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.25); });
+  on('#zoomOut', 'click', () => { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 0.8); });
+  on('#zoomFit', 'click', fitView);
 
-  $('#btnNew').addEventListener('click', () => {
+  on('#btnNew', 'click', () => {
     if (!confirm('現在の路線図を消去して新規作成しますか？（「元に戻す」で復元できます）')) return;
     pushUndo();
     state = emptyState();
@@ -2062,7 +2064,7 @@
     commit();
     fitView();
   });
-  $('#btnSample').addEventListener('click', () => {
+  on('#btnSample', 'click', () => {
     if (Object.keys(state.stations).length && !confirm('サンプルの路線図を読み込みますか？（「元に戻す」で復元できます）')) return;
     pushUndo();
     state = sampleState();
@@ -2088,9 +2090,9 @@
     download(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), fileBase() + '.json');
     toast('JSONファイルを保存しました');
   }
-  $('#btnSave').addEventListener('click', saveJSON);
-  $('#btnOpen').addEventListener('click', () => $('#fileInput').click());
-  $('#fileInput').addEventListener('change', (e) => {
+  on('#btnSave', 'click', saveJSON);
+  on('#btnOpen', 'click', () => $('#fileInput').click());
+  on('#fileInput', 'change', (e) => {
     const f = e.target.files[0];
     if (!f) return;
     const rd = new FileReader();
@@ -2185,13 +2187,13 @@ ${legend}
     return out;
   }
 
-  $('#btnSVG').addEventListener('click', () => {
+  on('#btnSVG', 'click', () => {
     if (!Object.keys(state.stations).length) { toast('駅がありません'); return; }
     download(new Blob([exportPrep()], { type: 'image/svg+xml' }), fileBase() + '.svg');
     toast('SVGを書き出しました');
   });
 
-  $('#btnPNG').addEventListener('click', () => {
+  on('#btnPNG', 'click', () => {
     if (!Object.keys(state.stations).length) { toast('駅がありません'); return; }
     const src = exportPrep();
     const img = new Image();

@@ -111,7 +111,7 @@
   }
 
   function emptyState() {
-    return { version: 1, stations: {}, lines: [], bends: {}, terrain: { shapes: [], landmarks: [] }, settings: defaultSettings() };
+    return { version: 1, stations: {}, lines: [], bends: {}, waypoints: {}, terrain: { shapes: [], landmarks: [] }, settings: defaultSettings() };
   }
 
   function sampleState() {
@@ -121,6 +121,7 @@
     add('nishiminato', '西港', 'Nishi-minato', -360, 0, 4);
     add('minatomachi', '港町', 'Minatomachi', -180, 0, 4);
     add('chuo', '中央', 'Chuō', 0, 0, 3);
+    Object.assign(s.stations.chuo, { terminal: true, tw: 80, th: 40 });
     add('higashimachi', '東町', 'Higashimachi', 180, 0, 3);
     add('higashiyama', '東山', 'Higashiyama', 340, -100, 2);
     add('kitayama', '北山', 'Kitayama', -80, -300, 2);
@@ -195,6 +196,7 @@
         id, name: String(st.name ?? ''), sub: String(st.sub ?? ''),
         x: Number(st.x) || 0, y: Number(st.y) || 0,
         label: Number.isInteger(st.label) && st.label >= -1 && st.label < 8 ? st.label : -1,
+        ...(st.terminal ? { terminal: true, tw: clamp(Number(st.tw) || 80, 20, 400), th: clamp(Number(st.th) || 40, 20, 400) } : {}),
       };
     }
     s.lines = raw.lines.filter(Boolean).map((ln, i) => ({
@@ -208,7 +210,15 @@
     }));
     s.bends = {};
     if (raw.bends && typeof raw.bends === 'object') {
-      for (const [k, v] of Object.entries(raw.bends)) if ([1, 2].includes(v)) s.bends[k] = v;
+      for (const [k, v] of Object.entries(raw.bends)) if ([1, 2, 3].includes(v)) s.bends[k] = v;
+    }
+    s.waypoints = {};
+    if (raw.waypoints && typeof raw.waypoints === 'object') {
+      for (const [k, v] of Object.entries(raw.waypoints)) {
+        if (!Array.isArray(v)) continue;
+        const wp = v.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [p[0], p[1]]);
+        if (wp.length) s.waypoints[k] = wp;
+      }
     }
     Object.assign(s.settings, raw.settings || {});
     s.settings.fontSize = clamp(Number(s.settings.fontSize) || 14, 8, 40);
@@ -319,6 +329,7 @@
     let best = null, bd = 6;
     for (const s of Object.values(state.stations)) {
       if (s.id === excludeId) continue;
+      if (s.terminal && Math.abs(x - s.x) <= s.tw / 2 && Math.abs(y - s.y) <= s.th / 2) return s;
       const d = Math.hypot(s.x - x, s.y - y);
       if (d <= bd) { bd = d; best = s; }
     }
@@ -379,6 +390,7 @@
     const used = new Set();
     for (const ln of state.lines) for (const [p, q] of linePairs(ln)) used.add(segKey(p, q));
     for (const k of Object.keys(state.bends)) if (!used.has(k)) delete state.bends[k];
+    for (const k of Object.keys(state.waypoints)) if (!used.has(k)) delete state.waypoints[k];
   }
 
   function removeFromLine(lineId, stationId) {
@@ -387,6 +399,17 @@
     ln.stations = ln.stations.filter((s) => s !== stationId);
     tidyLine(ln);
     cleanBends();
+  }
+
+  function setTerminal(st, on) {
+    if (!st) return;
+    if (on) {
+      st.terminal = true;
+      st.tw = st.tw || prefs.gridSize * 4;
+      st.th = st.th || prefs.gridSize * 2;
+    } else {
+      delete st.terminal; delete st.tw; delete st.th;
+    }
   }
 
   /** fromId の駅を toId の駅に統合(乗換駅化) */
@@ -441,6 +464,7 @@
       }
     }
     delete state.bends[key];
+    delete state.waypoints[key];
   }
 
   /** 位置 w に駅を置く(線の上なら区間に挿入)。作成/既存の駅を返す。履歴は呼び出し側で */
@@ -474,6 +498,63 @@
     if (adx > ady) m = bend ? [a.x + sx * ady, b.y] : [b.x - sx * ady, a.y];
     else m = bend ? [b.x, a.y + sy * adx] : [a.x, b.y - sy * adx];
     return [A, m, B];
+  }
+
+  /** Catmull-Rom 曲線で点列をなめらかにつなぐ */
+  function splinePoints(nodes) {
+    const P = nodes.map((n) => [n.x, n.y]);
+    if (P.length < 3) return P;
+    const out = [P[0]];
+    for (let i = 0; i < P.length - 1; i++) {
+      const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || P[i + 1];
+      const steps = Math.max(6, Math.ceil(dist(p1, p2) / 12));
+      for (let k = 1; k <= steps; k++) {
+        const t = k / steps, t2 = t * t, t3 = t2 * t;
+        out.push([0, 1].map((j) => 0.5 * ((2 * p1[j]) + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3)));
+      }
+    }
+    return out;
+  }
+
+  /** 区間(正規化キー a<b)の中心線。経由点と曲がり方(0,1=折れ線 2=直線 3=曲線)を反映 */
+  function segmentRoute(key) {
+    const [a, b] = key.split('|');
+    const nodes = [state.stations[a], ...(state.waypoints[key] || []).map((p) => ({ x: p[0], y: p[1] })), state.stations[b]];
+    const bend = state.bends[key] || 0;
+    if (bend === 3) {
+      if (nodes.length > 2) return splinePoints(nodes);
+      // 経由点がないときは、折れ線の角を制御点にしたなめらかなカーブにする
+      const r = routePoints(nodes[0], nodes[1], 0);
+      if (r.length < 3) return r;
+      const [A, M, B] = r, out = [];
+      const steps = Math.max(8, Math.ceil((dist(A, M) + dist(M, B)) / 12));
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps, u = 1 - t;
+        out.push([u * u * A[0] + 2 * u * t * M[0] + t * t * B[0], u * u * A[1] + 2 * u * t * M[1] + t * t * B[1]]);
+      }
+      return out;
+    }
+    const pts = [];
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const leg = routePoints(nodes[i], nodes[i + 1], bend);
+      pts.push(...(i ? leg.slice(1) : leg));
+    }
+    return pts;
+  }
+
+  /** 経由点を入れる位置(何番目の区間の近くか) */
+  function waypointInsertIndex(key, w) {
+    const [a, b] = key.split('|');
+    const nodes = [state.stations[a], ...(state.waypoints[key] || []).map((p) => ({ x: p[0], y: p[1] })), state.stations[b]];
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const A = nodes[i], B = nodes[i + 1];
+      const dx = B.x - A.x, dy = B.y - A.y, L2 = dx * dx + dy * dy;
+      const t = L2 ? clamp(((w.x - A.x) * dx + (w.y - A.y) * dy) / L2, 0, 1) : 0;
+      const d = Math.hypot(w.x - A.x - t * dx, w.y - A.y - t * dy);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
   }
 
   function offsetPolyline(pts, d) {
@@ -525,7 +606,7 @@
       }
     }
     for (const s of segs.values()) {
-      s.pts = routePoints(state.stations[s.a], state.stations[s.b], state.bends[s.key] || 0);
+      s.pts = segmentRoute(s.key);
       const n = s.lines.length;
       const sp = Math.max(...s.lines.map((l) => l.width)) + 2;
       s.off = new Map();
@@ -591,13 +672,30 @@
   }
 
   function stationShape(st) {
+    if (st.terminal) return { p1: [st.x, st.y], p2: [st.x, st.y], R: 0, rect: { w: st.tw, h: st.th } };
     const pts = geom.stPts[st.id] || [[st.x, st.y]];
     const [p1, p2] = farthestPair(pts);
     const R = stationRadius(geom.stLines[st.id] || []);
     return { p1, p2, R };
   }
 
+  function terminalMarkup(st) {
+    const W = st.tw, H = st.th, x = st.x - W / 2, y = st.y - H / 2;
+    const fs = state.settings.fontSize;
+    const nameFs = r1(clamp(Math.min(fs * 1.25, (W - 10) / Math.max(1, [...st.name].length) * 1.05), 8, fs * 1.6));
+    const subFs = r1(Math.min(fs * 0.62, (W - 8) / Math.max(1, st.sub.length) * 1.8));
+    const showSub = st.sub && H >= nameFs + subFs + 8;
+    const ny = st.y + (showSub ? -subFs / 2 - 1 : 0);
+    let t = `<rect x="${r1(x - 7)}" y="${r1(y - 7)}" width="${r1(W + 14)}" height="${r1(H + 14)}" fill="transparent"/>`
+      + `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(W)}" height="${r1(H)}" rx="${r1(Math.min(8, H / 4))}" fill="#fff" stroke="#222" stroke-width="3.5"/>`
+      + `<rect x="${r1(x + 4)}" y="${r1(y + 4)}" width="${r1(W - 8)}" height="${r1(H - 8)}" rx="${r1(Math.min(5, H / 5))}" fill="none" stroke="#222" stroke-width="1"/>`;
+    if (st.name) t += `<text x="${r1(st.x)}" y="${r1(ny)}" font-size="${nameFs}" font-weight="800" text-anchor="middle" dominant-baseline="central" fill="#1d2330">${esc(st.name)}</text>`;
+    if (showSub) t += `<text x="${r1(st.x)}" y="${r1(ny + nameFs / 2 + subFs / 2 + 2)}" font-size="${subFs}" text-anchor="middle" dominant-baseline="central" fill="#5b6472">${esc(st.sub)}</text>`;
+    return t;
+  }
+
   function stationMarkup(st) {
+    if (st.terminal) return terminalMarkup(st);
     const lns = geom.stLines[st.id] || [];
     const { p1, p2, R } = stationShape(st);
     const inter = lns.length >= 2;
@@ -613,7 +711,7 @@
   }
 
   function labelMarkup(st) {
-    if (!st.name && !st.sub) return '';
+    if (st.terminal || (!st.name && !st.sub)) return '';
     const fs = state.settings.fontSize;
     const subFs = Math.round(fs * 0.62 * 10) / 10;
     const dirIdx = st.label >= 0 ? st.label : autoLabelDir(st.id);
@@ -728,10 +826,29 @@
     gStations.innerHTML = sh;
     gLabels.innerHTML = th;
     gLabels.setAttribute('font-family', FONT);
+    gStations.setAttribute('font-family', FONT);
+    renderHandles();
 
     renderSelection();
     renderPreview();
     renderOverlays();
+  }
+
+  function renderHandles() {
+    const g = $('#gHandles');
+    if (mode !== 'select' || sel?.type !== 'line') { g.innerHTML = ''; return; }
+    const ln = lineById(sel.id);
+    if (!ln) { g.innerHTML = ''; return; }
+    const keys = new Set(linePairs(ln).map(([p, q]) => segKey(p, q)));
+    const sz = 7 / view.k;
+    let h = '';
+    for (const k of keys) {
+      (state.waypoints[k] || []).forEach((p, i) => {
+        h += `<g data-wp="${esc(k)}" data-wpi="${i}"><circle cx="${p[0]}" cy="${p[1]}" r="${r1(sz * 2.2)}" fill="transparent"/>`
+          + `<rect x="${r1(p[0] - sz)}" y="${r1(p[1] - sz)}" width="${r1(sz * 2)}" height="${r1(sz * 2)}" rx="${r1(sz * 0.4)}" fill="#fff" stroke="${esc(ln.color)}" stroke-width="${r1(2.5 / view.k)}"/></g>`;
+      });
+    }
+    g.innerHTML = h;
   }
 
   function renderSelection() {
@@ -749,7 +866,12 @@
       if (l) over += `<circle cx="${r1(l.x)}" cy="${r1(l.y)}" r="${r1(14 * (state.settings.stationScale || 1) + 7)}" fill="#1f6feb" fill-opacity="0.25" pointer-events="none"/>`;
     } else {
       for (const id of selIds()) {
-        const { p1, p2, R } = stationShape(state.stations[id]);
+        const st0 = state.stations[id];
+        if (st0.terminal) {
+          over += `<rect x="${r1(st0.x - st0.tw / 2 - 7)}" y="${r1(st0.y - st0.th / 2 - 7)}" width="${r1(st0.tw + 14)}" height="${r1(st0.th + 14)}" rx="10" fill="#1f6feb" fill-opacity="0.25" pointer-events="none"/>`;
+          continue;
+        }
+        const { p1, p2, R } = stationShape(st0);
         over += `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="#1f6feb" stroke-opacity="0.35" stroke-width="${r1(2 * R + 14)}" stroke-linecap="round" pointer-events="none"/>`;
       }
     }
@@ -776,6 +898,7 @@
     terrainVp.setAttribute('transform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     gridPat.setAttribute('patternTransform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     if (nameEdit) positionNameEditor();
+    if (sel?.type === 'line' && geom) renderHandles();
   }
 
   function renderOverlays() {
@@ -796,6 +919,8 @@
   function renderLineChips() {
     $('#lineChips').innerHTML = state.lines.map((l) => `<button class="chip ${l.id === activeLineId ? 'active' : ''}" data-chip="${esc(l.id)}" style="background:${esc(l.color)}" title="${esc(l.name)}">${esc(l.code || l.name.slice(0, 1) || '?')}</button>`).join('')
       + '<button class="chip add" data-chip-add title="路線を追加">＋</button>';
+    const tids = selIds();
+    $('#btnTerminal').classList.toggle('active', !!tids.length && tids.every((id) => state.stations[id].terminal));
     const ln = activeLine();
     const rb = $('#btnReverse');
     rb.disabled = !ln || ln.stations.length < 2;
@@ -817,6 +942,7 @@
   }
 
   function renderInspector() {
+    renderLineChips();
     const ids = selIds();
     if (ids.length === 1) return renderStationInspector(state.stations[ids[0]]);
     if (ids.length > 1) return renderMultiInspector(ids);
@@ -840,7 +966,16 @@
       <h2>駅</h2>
       <label class="field">駅名 <input type="text" data-field="name" value="${esc(st.name)}" maxlength="40"></label>
       <label class="field">副駅名（英字・読みなど） <input type="text" data-field="sub" value="${esc(st.sub)}" maxlength="60"></label>
-      <div class="field">駅名の位置 ${dirGrid(st.label, auto)}</div>
+      <div class="field">駅の種類
+        <div class="seg-toggle" style="align-self:flex-start">
+          <button data-act="kind" data-kind="normal" class="${st.terminal ? '' : 'active'}">◯ 普通駅</button>
+          <button data-act="kind" data-kind="terminal" class="${st.terminal ? 'active' : ''}">🚉 ターミナル駅</button>
+        </div>
+      </div>
+      ${st.terminal ? `<div class="row">
+        <div class="field">幅（マス）<div class="stepper"><button data-act="tsize" data-dim="tw" data-d="-1">－</button><span>${Math.round(st.tw / prefs.gridSize)}</span><button data-act="tsize" data-dim="tw" data-d="1">＋</button></div></div>
+        <div class="field">高さ（マス）<div class="stepper"><button data-act="tsize" data-dim="th" data-d="-1">－</button><span>${Math.round(st.th / prefs.gridSize)}</span><button data-act="tsize" data-dim="th" data-d="1">＋</button></div></div>
+      </div>` : `<div class="field">駅名の位置 ${dirGrid(st.label, auto)}</div>`}
       <div class="field">所属路線
         ${lns.length ? `<ul class="st-list">${lns.map((l) => `
           <li><span class="badge" style="background:${esc(l.color)}">${esc(l.code || '　')}</span>
@@ -914,6 +1049,12 @@
           <button class="small" data-act="distribute" ${ids.length < 3 ? 'disabled' : ''}>等間隔に並べる</button>
         </div>
       </div>
+      <div class="field">駅の種類（まとめて変更）
+        <div class="btn-row">
+          <button class="small" data-act="kind" data-kind="normal">◯ 普通駅にする</button>
+          <button class="small" data-act="kind" data-kind="terminal">🚉 ターミナル駅にする</button>
+        </div>
+      </div>
       <div class="field">駅名の位置（まとめて変更） ${dirGrid(cur, -2)}</div>
       <div class="field">路線
         <div class="btn-row">
@@ -933,10 +1074,13 @@
       const [a, b] = sel.seg.split('|');
       if (!state.stations[a] || !state.stations[b]) return '';
       const cur = state.bends[sel.seg] || 0;
-      return `<div class="field">選択区間: ${esc(state.stations[a].name)} – ${esc(state.stations[b].name)} の曲がり方
+      const nwp = (state.waypoints[sel.seg] || []).length;
+      return `<div class="field">選択区間: ${esc(state.stations[a].name)} – ${esc(state.stations[b].name)} の経路
         <div class="btn-row">
-          ${['折れ方1', '折れ方2', '直線'].map((t, i) => `<button class="small ${cur === i ? 'primary' : ''}" data-act="bend" data-bend="${i}">${t}</button>`).join('')}
-        </div></div>`;
+          ${['折れ線1', '折れ線2', '直線', '曲線'].map((t, i) => `<button class="small ${cur === i ? 'primary' : ''}" data-act="bend" data-bend="${i}">${t}</button>`).join('')}
+        </div>
+        <span class="muted">経由点: ${nwp}個 ${nwp ? '<button class="small" data-act="wp-clear">経由点をすべて消す</button>' : ''}<br>線をドラッグすると経由点ができ、経路を自由に曲げられます。□をドラッグで移動、ダブルタップで削除。</span>
+      </div>`;
     })();
     inspector.innerHTML = `
       <h2>路線</h2>
@@ -963,6 +1107,11 @@
           <button data-act="move" data-i="${i}" data-d="1" title="下へ" ${i === ln.stations.length - 1 ? 'disabled' : ''}>↓</button>
           <button data-act="remove-index" data-i="${i}" title="路線から外す">✕</button></li>`).join('')}</ul>`
         : '<span class="muted">「路線」ツールで駅をクリックして追加してください</span>'}
+      </div>
+      <div class="btn-row">
+        <button class="small" data-act="line-route" data-bend="3" title="この路線の全区間を曲線にする">全区間を曲線に</button>
+        <button class="small" data-act="line-route" data-bend="0" title="この路線の全区間を折れ線に戻す">全区間を折れ線に</button>
+        <button class="small" data-act="line-wp-clear" title="この路線の経由点をすべて消す">経由点をリセット</button>
       </div>
       <div class="btn-row">
         <button class="primary" data-act="draw-line">この路線を延長する</button>
@@ -1186,6 +1335,16 @@
       return;
     }
 
+    const wpEl = e.target.closest('[data-wp]');
+    if (wpEl && mode === 'select') {
+      const key = wpEl.dataset.wp, idx = Number(wpEl.dataset.wpi);
+      const p = state.waypoints[key]?.[idx];
+      if (p) {
+        drag = { type: 'waypoint', key, idx, sp, start: w, orig: p.slice(), moved: false, tap: { kind: 'wp', key, idx, sp } };
+        return;
+      }
+    }
+
     if (stEl) {
       const id = stEl.dataset.station;
       if (mode === 'delete') { pushUndo(); deleteStations([id]); commit(); return; }
@@ -1222,7 +1381,8 @@
         activeLineId = id;
         sel = { type: 'line', id, seg };
         renderAll();
-        startBgDrag(e, sp, w, { tap: { kind: 'line', seg, sp, w } });
+        // 線をドラッグすると経由点を作って経路を曲げる
+        drag = { type: 'waypoint', key: seg, idx: -1, sp, start: w, orig: [w.x, w.y], moved: false, tap: { kind: 'line', seg, sp, w } };
         return;
       }
       // 路線/範囲モードでは線の上も背景と同じ扱い
@@ -1268,6 +1428,25 @@
       drag.pts.push([w.x, w.y]);
       drag.lastSp = sp;
       renderTerrainPreview();
+      return;
+    }
+    if (drag.type === 'waypoint') {
+      if (!drag.moved && !moved) return;
+      const nx = snap(drag.orig[0] + (w.x - drag.start.x)), ny = snap(drag.orig[1] + (w.y - drag.start.y));
+      if (!drag.moved) {
+        pushUndo();
+        drag.moved = true;
+        lastTap = null;
+        if (drag.idx < 0) {
+          const list = (state.waypoints[drag.key] ??= []);
+          drag.idx = waypointInsertIndex(drag.key, drag.start);
+          list.splice(drag.idx, 0, [nx, ny]);
+        }
+      }
+      const p = state.waypoints[drag.key]?.[drag.idx];
+      if (!p) return;
+      p[0] = nx; p[1] = ny;
+      renderMap();
       return;
     }
     if (drag.type === 'landmark') {
@@ -1339,7 +1518,7 @@
 
   function handleTap(tap, e) {
     const now = performance.now();
-    const key = tap.kind === 'landmark' ? 'lm:' + tap.id : tap.kind === 'station' ? 'st:' + tap.id : tap.kind === 'line' ? 'ln:' + tap.seg : 'bg';
+    const key = tap.kind === 'wp' ? `wp:${tap.key}:${tap.idx}` : tap.kind === 'landmark' ? 'lm:' + tap.id : tap.kind === 'station' ? 'st:' + tap.id : tap.kind === 'line' ? 'ln:' + tap.seg : 'bg';
     if (lastTap && now - lastTap.t < DOUBLE_TAP_MS && lastTap.key === key &&
       Math.hypot(tap.sp.x - lastTap.sp.x, tap.sp.y - lastTap.sp.y) < 24) {
       lastTap = null;
@@ -1383,6 +1562,14 @@
 
   function onDoubleTap(tap) {
     if (tap.kind === 'landmark') { openNameEditor(tap.id, false, 'landmark'); return; }
+    if (tap.kind === 'wp') {
+      pushUndo();
+      const list = state.waypoints[tap.key];
+      if (list) { list.splice(tap.idx, 1); if (!list.length) delete state.waypoints[tap.key]; }
+      commit();
+      toast('経由点を削除しました');
+      return;
+    }
     if (tap.kind === 'station') { openNameEditor(tap.id); return; }
     if (mode === 'line') {
       const x = snap(tap.w.x), y = snap(tap.w.y);
@@ -1418,6 +1605,11 @@
     const d = drag;
     drag = null;
     svg.classList.remove('panning');
+    if (d.type === 'waypoint') {
+      if (d.moved) { save(); renderInspector(); }
+      else if (e.type === 'pointerup' && d.tap) handleTap(d.tap, e);
+      return;
+    }
     if (d.type === 'paint') { if (e.type === 'pointerup') finishPaint(d); else renderTerrainPreview(); return; }
     if (d.type === 'landmark') {
       if (d.moved) { save(); renderMap(); }
@@ -1569,6 +1761,16 @@
     if (e.target.closest('[data-chip-add]')) $('#btnAddLine').click();
   });
 
+  $('#btnTerminal').addEventListener('click', () => {
+    const ids = selIds();
+    if (!ids.length) { toast('ターミナル駅にしたい駅を選んでください'); return; }
+    const on = !ids.every((id) => state.stations[id].terminal);
+    pushUndo();
+    for (const id of ids) setTerminal(state.stations[id], on);
+    commit();
+    toast(on ? 'ターミナル駅にしました' : '普通駅に戻しました');
+  });
+
   $('#btnReverse').addEventListener('click', () => {
     const ln = activeLine();
     if (!ln || ln.stations.length < 2) return;
@@ -1646,6 +1848,21 @@
     const act = b.dataset.act;
     const ids = selIds();
     if (ids.length) {
+      if (act === 'kind') {
+        pushUndo();
+        for (const id of ids) setTerminal(state.stations[id], b.dataset.kind === 'terminal');
+        commit();
+        return;
+      }
+      if (act === 'tsize') {
+        const st = state.stations[ids[0]], g = prefs.gridSize;
+        const v = clamp(Math.round(st[b.dataset.dim] / g) + Number(b.dataset.d), 1, 20) * g;
+        if (v === st[b.dataset.dim]) return;
+        pushUndo();
+        st[b.dataset.dim] = v;
+        commit();
+        return;
+      }
       if (act === 'label') {
         pushUndo();
         for (const id of ids) state.stations[id].label = Number(b.dataset.dir);
@@ -1697,8 +1914,17 @@
         const v = Number(b.dataset.bend);
         if (v) state.bends[sel.seg] = v; else delete state.bends[sel.seg];
         commit();
-      } else if (act === 'goto-station') { selectStations([b.dataset.id]); renderAll(); }
-      else if (act === 'select-line-stations') { selectStations(ln.stations); renderAll(); }
+      } else if (act === 'wp-clear') { pushUndo(); delete state.waypoints[sel.seg]; commit(); }
+      else if (act === 'goto-station') { selectStations([b.dataset.id]); renderAll(); }
+      else if (act === 'line-route' || act === 'line-wp-clear') {
+        pushUndo();
+        for (const [p, q] of linePairs(ln)) {
+          const k = segKey(p, q);
+          if (act === 'line-wp-clear') delete state.waypoints[k];
+          else if (Number(b.dataset.bend)) state.bends[k] = Number(b.dataset.bend); else delete state.bends[k];
+        }
+        commit();
+      } else if (act === 'select-line-stations') { selectStations(ln.stations); renderAll(); }
       else if (act === 'move') {
         const j = i + Number(b.dataset.d);
         if (j < 0 || j >= ln.stations.length) return;

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>路線図メーカー</title>
   <meta name="description" content="架空の鉄道路線図をブラウザで作成・保存・書き出しできるエディタ">
-  <link rel="stylesheet" href="style.css?v=17">
+  <link rel="stylesheet" href="style.css?v=18">
 </head>
 <body>
   <header class="topbar">
@@ -116,7 +116,8 @@
       <div class="overlay title" id="mapTitle"></div>
       <div class="overlay legend" id="legend"></div>
       <div class="overlay hint" id="hint"></div>
-      <div class="overlay scale-bar" id="scaleBar" hidden></div>
+      <button class="overlay scale-bar" id="scaleBar" title="タップして縮尺を変更" hidden></button>
+      <div class="scale-pop" id="scalePop" hidden></div>
       <div class="overlay zoom">
         <button id="zoomIn" title="拡大">＋</button>
         <button id="zoomOut" title="縮小">－</button>
@@ -205,6 +206,6 @@
     </aside>
   </main>
 
-  <script src="app.js?v=17"></script>
+  <script src="app.js?v=18"></script>
 </body>
 </html>

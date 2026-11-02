@@ -607,7 +607,40 @@
     const mpp = state.settings.mPerUnit / view.k; // 1px あたりのメートル
     const m = niceNum(110 * mpp);
     el.hidden = false;
-    el.innerHTML = `<div class="sb-bar" style="width:${Math.round(m / mpp)}px"></div><span>${fmtLen(m)}</span>`;
+    el.innerHTML = `<div class="sb-bar" style="width:${Math.round(m / mpp)}px"></div><span>${fmtLen(m)} <b class="sb-edit">✎</b></span>`;
+  }
+
+  // ---- 縮尺バーから縮尺を編集するパネル
+  let scaleEditPushed = false;
+  function renderScalePop() {
+    const pop = $('#scalePop');
+    if (!pop || pop.hidden) return;
+    const S = state.settings, g = prefs.gridSize;
+    const per = S.mPerUnit * g;
+    const presets = [50, 100, 200, 500, 1000, 2000];
+    const seg = sel?.type === 'line' && sel.seg && geom?.segs.get(sel.seg) ? sel.seg : null;
+    const segName = seg ? seg.split('|').map((id) => state.stations[id]?.name).join('–') : '';
+    pop.innerHTML = `
+      <div class="sp-head"><b>縮尺を設定</b><button class="vc-close" data-sp="close" title="閉じる">×</button></div>
+      <label class="sp-row">1マス ＝ <input type="number" id="spMeters" min="0" step="any" inputmode="decimal" value="${+per.toPrecision(6)}"> m</label>
+      <div class="sp-presets">${presets.map((m) => `<button class="small ${Math.abs(per - m) < 1e-6 ? 'primary' : ''}" data-sp="preset" data-m="${m}">${fmtLen(m)}</button>`).join('')}</div>
+      ${seg ? `<div class="sp-seg">
+        <div class="muted">選択中の区間「${esc(segName)}」（いま 約 ${fmtKm(segKm(seg))}）を</div>
+        <label class="sp-row"><input type="number" id="spSegKm" min="0" step="any" inputmode="decimal" placeholder="例: 2.5"> km にする <button class="small primary" data-sp="fit">合わせる</button></label>
+      </div>` : '<p class="muted">路線ツールで駅間をタップして選ぶと、その区間の実際の距離から縮尺を合わせられます。</p>'}
+      <label class="check"><input type="checkbox" data-sp="show" ${S.showScale ? 'checked' : ''}> 縮尺バーを表示</label>`;
+  }
+  function openScalePop() {
+    const pop = $('#scalePop');
+    pop.hidden = !pop.hidden;
+    scaleEditPushed = false;
+    renderScalePop();
+  }
+  function applyScale(mPerUnit, pushed) {
+    if (!(mPerUnit > 0)) return;
+    if (!pushed) pushUndo();
+    state.settings.mPerUnit = mPerUnit;
+    renderScaleBar(); renderInspector(); renderViewCard(); renderSettings(); save();
   }
 
   function offsetPolyline(pts, d) {
@@ -1021,6 +1054,7 @@
 
   function renderInspector() {
     renderLineChips();
+    if (!$('#scalePop')?.contains(document.activeElement)) renderScalePop();
     if (mode === 'view') {
       inspector.innerHTML = '<h2>閲覧モード</h2><p class="muted">地図を見るためのモードです。編集はできません。駅・路線・ランドマークをタップすると情報が表示されます。編集に戻るときは「選択」などのツールを押してください。</p>';
       return;
@@ -1337,6 +1371,33 @@
   }
 
   on('#btnIsland', 'click', () => toggleIsland());
+
+  on('#scaleBar', 'click', openScalePop);
+  on('#scalePop', 'input', (e) => {
+    if (e.target.id === 'spMeters') {
+      const v = Number(e.target.value);
+      if (v > 0) { applyScale(v / prefs.gridSize, scaleEditPushed); scaleEditPushed = true; }
+    }
+  });
+  on('#scalePop', 'change', (e) => {
+    if (e.target.dataset.sp === 'show') { pushUndo(); state.settings.showScale = e.target.checked; renderScaleBar(); renderSettings(); save(); }
+    if (e.target.id === 'spMeters') { scaleEditPushed = false; renderScalePop(); }
+  });
+  on('#scalePop', 'click', (e) => {
+    const b = e.target.closest('button[data-sp]');
+    if (!b) return;
+    if (b.dataset.sp === 'close') { $('#scalePop').hidden = true; return; }
+    if (b.dataset.sp === 'preset') { applyScale(Number(b.dataset.m) / prefs.gridSize); renderScalePop(); toast(`縮尺を 1マス＝${fmtLen(Number(b.dataset.m))} にしました`); }
+    if (b.dataset.sp === 'fit') {
+      const km = Number($('#spSegKm').value);
+      const cur = segKm(sel.seg);
+      if (!(km > 0) || !(cur > 0)) { toast('距離（km）を入力してください'); return; }
+      applyScale(state.settings.mPerUnit * km / cur);
+      renderScalePop();
+      toast(`区間が ${fmtKm(km)} になるよう縮尺を合わせました`);
+    }
+  });
+  on('#scalePop', 'keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'spSegKm') $('#scalePop [data-sp="fit"]')?.click(); e.stopPropagation(); });
 
   on('#viewCard', 'click', (e) => {
     const t = e.target.closest('[data-vline],[data-vst],[data-vclose]');

@@ -1229,15 +1229,16 @@
       </label>
       <label class="check"><input type="checkbox" data-field="loop" ${ln.loop ? 'checked' : ''} ${ln.stations.length < 3 ? 'disabled' : ''}> 環状線（終点と始発駅をつなぐ）</label>
       ${segInfo}
-      <div class="field">駅一覧（${ln.stations.length}駅${ln.stations.length > 1 ? `・全長 約 ${fmtKm(lk.total)}` : ''}）
+      <div class="field">駅一覧（${ln.stations.length}駅${ln.stations.length > 1 ? `・全長 約 ${fmtKm(lk.total)}・数字は駅間距離 km` : ''}）
         ${ln.stations.length ? `<ul class="st-list">${ln.stations.map((id, i) => `
           <li><span class="idx">${i + 1}</span>
           <span class="nm" data-act="goto-station" data-id="${esc(id)}">${esc(state.stations[id]?.name || '?')}</span>
-          <span class="km" title="起点からの距離${i ? `（前の駅から ${fmtKm(lk.cum[i] - lk.cum[i - 1])}）` : ''}">${lk.cum[i].toFixed(1)}</span>
+          <span class="km" title="${i ? `前の駅からの距離（起点から ${fmtKm(lk.cum[i])}）` : '起点'}">${i ? (lk.cum[i] - lk.cum[i - 1]).toFixed(1) : '—'}</span>
           <button data-act="move" data-i="${i}" data-d="-1" title="上へ" ${i === 0 ? 'disabled' : ''}>↑</button>
           <button data-act="move" data-i="${i}" data-d="1" title="下へ" ${i === ln.stations.length - 1 ? 'disabled' : ''}>↓</button>
           <button data-act="remove-index" data-i="${i}" title="路線から外す">✕</button></li>`).join('')}</ul>`
         : '<span class="muted">「路線」ツールで駅をクリックして追加してください</span>'}
+        ${ln.loop && ln.stations.length > 2 ? `<span class="muted">↻ ${esc(state.stations[ln.stations[ln.stations.length - 1]]?.name || '')} → ${esc(state.stations[ln.stations[0]]?.name || '')}：${lk.closing.toFixed(1)} km</span>` : ''}
       </div>
       <div class="btn-row">
         <button class="small" data-act="line-route" data-bend="3" title="この路線の全区間を曲線にする">全区間を曲線に</button>
@@ -1346,10 +1347,11 @@
       const l = lineById(v.id);
       const names = l.stations.map((id) => state.stations[id]).filter(Boolean);
       const lk = lineKm(l);
-      const km = (v, d) => `<span class="vc-km">${v.toFixed(1)} km${d != null ? `<small>+${d.toFixed(1)}</small>` : ''}</span>`;
+      // 駅間距離（前の駅から）を表示。起点からの距離は小さく添える
+      const km = (v, d) => `<span class="vc-km">${d != null ? `${d.toFixed(1)} km<small>計 ${v.toFixed(1)}</small>` : '<small>起点</small>'}</span>`;
       h = `<div class="vc-head"><div><div class="vc-title">${badge(l)} ${esc(l.name)}</div><div class="vc-sub">${names.length}駅${l.loop ? '・環状線' : names.length > 1 ? `・${esc(names[0].name)} ⇔ ${esc(names[names.length - 1].name)}` : ''}${names.length > 1 ? `・全長 約 ${fmtKm(lk.total)}` : ''}</div></div><button class="vc-close" data-vclose title="閉じる">×</button></div>`
         + `<div class="vc-route" style="--lc:${esc(l.color)}">${names.map((st, i) => `<button data-vst="${esc(st.id)}"><i></i>${esc(st.name)}${km(lk.cum[i] || 0, i ? lk.cum[i] - lk.cum[i - 1] : null)}</button>`).join('')}${l.loop && names.length ? `<button data-vst="${esc(names[0].id)}"><i></i>${esc(names[0].name)}${km(lk.total, lk.closing)}</button>` : ''}</div>`
-        + '<div class="vc-label">距離は縮尺からの概算です（左：起点からの距離、＋：前の駅から）</div>';
+        + '<div class="vc-label">距離は縮尺からの概算です（前の駅からの駅間距離。「計」は起点からの距離）</div>';
     } else if (v?.type === 'landmark' && landmarkById(v.id)) {
       const l = landmarkById(v.id);
       h = `<div class="vc-head"><div><div class="vc-title">${LM[l.icon]?.g || ''} ${esc(l.name || LM[l.icon]?.n || 'ランドマーク')}</div><div class="vc-sub">${esc(LM[l.icon]?.n || '')}</div></div><button class="vc-close" data-vclose title="閉じる">×</button></div>`;

@@ -112,7 +112,7 @@
 
   // ---------- データ ----------
   function defaultSettings() {
-    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true, stationScale: 1, waterColor: '#a9d4f2', island: false };
+    return { title: '架空鉄道 路線図', bg: '#ffffff', grid: true, fontSize: 14, showLegend: true, stationScale: 1, waterColor: '#a9d4f2', island: false, mPerUnit: 10, showScale: true };
   }
 
   function emptyState() {
@@ -231,6 +231,8 @@
     Object.assign(s.settings, raw.settings || {});
     s.settings.fontSize = clamp(Number(s.settings.fontSize) || 14, 8, 40);
     s.settings.island = !!s.settings.island;
+    s.settings.mPerUnit = clamp(Number(s.settings.mPerUnit) || 10, 0.001, 1e6);
+    s.settings.showScale = s.settings.showScale !== false;
     s.settings.stationScale = clamp(Number(s.settings.stationScale) || 1, 0.5, 2);
     if (!/^#[0-9a-f]{6}$/i.test(s.settings.waterColor)) s.settings.waterColor = defaultSettings().waterColor;
     const T = raw.terrain || {};
@@ -575,6 +577,37 @@
       if (d < bd) { bd = d; best = i; }
     }
     return best;
+  }
+
+  // ---- 縮尺と距離
+  const polyLen = (pts) => { let L = 0; for (let i = 1; i < pts.length; i++) L += dist(pts[i - 1], pts[i]); return L; };
+  /** 駅間(区間キー)の距離 km。実際の線路の形(折れ線・曲線・経由点)の長さから概算 */
+  const segKm = (key) => {
+    const pts = geom?.segs.get(key)?.pts || segmentRoute(key);
+    return polyLen(pts) * state.settings.mPerUnit / 1000;
+  };
+  const fmtKm = (km) => (km >= 100 ? km.toFixed(0) : km.toFixed(1)) + ' km';
+  /** 路線の各駅の累計キロと全長 */
+  function lineKm(ln) {
+    const cum = [0];
+    const s = ln.stations;
+    for (let i = 1; i < s.length; i++) cum.push(cum[i - 1] + (s[i] === s[i - 1] ? 0 : segKm(segKey(s[i - 1], s[i]))));
+    let total = cum[cum.length - 1] || 0;
+    let closing = 0;
+    if (ln.loop && s.length > 2 && s[0] !== s[s.length - 1]) { closing = segKm(segKey(s[s.length - 1], s[0])); total += closing; }
+    return { cum, total, closing };
+  }
+  const niceNum = (v) => { const e = Math.pow(10, Math.floor(Math.log10(v))); const f = v / e; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * e; };
+  const fmtLen = (m) => (m >= 1000 ? `${+(m / 1000).toFixed(2)} km` : `${+m.toFixed(1)} m`);
+
+  function renderScaleBar() {
+    const el = $('#scaleBar');
+    if (!el || !state) return;
+    if (!state.settings.showScale) { el.hidden = true; return; }
+    const mpp = state.settings.mPerUnit / view.k; // 1px あたりのメートル
+    const m = niceNum(110 * mpp);
+    el.hidden = false;
+    el.innerHTML = `<div class="sb-bar" style="width:${Math.round(m / mpp)}px"></div><span>${fmtLen(m)}</span>`;
   }
 
   function offsetPolyline(pts, d) {
@@ -933,6 +966,7 @@
     terrainVp.setAttribute('transform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     gridPat.setAttribute('patternTransform', `translate(${r1(view.x)} ${r1(view.y)}) scale(${view.k})`);
     if (nameEdit) positionNameEditor();
+    renderScaleBar();
     // 拡大縮小しても経由点の見た目の大きさが変わらないよう描き直す
     if (geom) renderHandles();
   }
@@ -1130,13 +1164,14 @@
   }
 
   function renderLineInspector(ln) {
+    const lk = lineKm(ln);
     const segInfo = (() => {
       if (!sel.seg) return '';
       const [a, b] = sel.seg.split('|');
       if (!state.stations[a] || !state.stations[b]) return '';
       const cur = state.bends[sel.seg] || 0;
       const nwp = (state.waypoints[sel.seg] || []).length;
-      return `<div class="field">選択区間: ${esc(state.stations[a].name)} – ${esc(state.stations[b].name)} の経路
+      return `<div class="field">選択区間: ${esc(state.stations[a].name)} – ${esc(state.stations[b].name)}（約 ${fmtKm(segKm(sel.seg))}）の経路
         <div class="btn-row">
           ${['折れ線1', '折れ線2', '直線', '曲線'].map((t, i) => `<button class="small ${cur === i ? 'primary' : ''}" data-act="bend" data-bend="${i}">${t}</button>`).join('')}
         </div>
@@ -1160,10 +1195,11 @@
       </label>
       <label class="check"><input type="checkbox" data-field="loop" ${ln.loop ? 'checked' : ''} ${ln.stations.length < 3 ? 'disabled' : ''}> 環状線（終点と始発駅をつなぐ）</label>
       ${segInfo}
-      <div class="field">駅一覧（${ln.stations.length}駅）
+      <div class="field">駅一覧（${ln.stations.length}駅${ln.stations.length > 1 ? `・全長 約 ${fmtKm(lk.total)}` : ''}）
         ${ln.stations.length ? `<ul class="st-list">${ln.stations.map((id, i) => `
           <li><span class="idx">${i + 1}</span>
           <span class="nm" data-act="goto-station" data-id="${esc(id)}">${esc(state.stations[id]?.name || '?')}</span>
+          <span class="km" title="起点からの距離${i ? `（前の駅から ${fmtKm(lk.cum[i] - lk.cum[i - 1])}）` : ''}">${lk.cum[i].toFixed(1)}</span>
           <button data-act="move" data-i="${i}" data-d="-1" title="上へ" ${i === 0 ? 'disabled' : ''}>↑</button>
           <button data-act="move" data-i="${i}" data-d="1" title="下へ" ${i === ln.stations.length - 1 ? 'disabled' : ''}>↓</button>
           <button data-act="remove-index" data-i="${i}" title="路線から外す">✕</button></li>`).join('')}</ul>`
@@ -1193,6 +1229,9 @@
     $('#setGrid').checked = S.grid;
     $('#setLegend').checked = S.showLegend;
     $('#setScale').value = S.stationScale;
+    if (document.activeElement !== $('#setMeters')) $('#setMeters').value = +(S.mPerUnit * prefs.gridSize).toPrecision(6);
+    $('#setShowScale').checked = S.showScale;
+    renderScaleBar();
     $('#prefGrid').value = String(prefs.gridSize);
     $('#prefAutoName').checked = prefs.autoName;
     $('#prefPrefix').value = prefs.namePrefix;
@@ -1258,13 +1297,25 @@
       const lns = state.lines.filter((l) => l.stations.includes(st.id));
       const trs = transfersOf(st.id).map((t) => state.stations[t.a === st.id ? t.b : t.a]);
       h = `<div class="vc-head"><div><div class="vc-title">${esc(st.name || '（名前なし）')}${st.terminal ? '<span class="vc-tag">ターミナル駅</span>' : ''}${lns.length >= 2 || trs.length ? '<span class="vc-tag">乗換駅</span>' : ''}</div>${st.sub ? `<div class="vc-sub">${esc(st.sub)}</div>` : ''}</div><button class="vc-close" data-vclose title="閉じる">×</button></div>`
+        + (() => {
+          const rows = [];
+          for (const l of lns) {
+            const i = l.stations.indexOf(st.id), n = l.stations.length;
+            const nb = [i > 0 ? l.stations[i - 1] : l.loop ? l.stations[n - 1] : null, i < n - 1 ? l.stations[i + 1] : l.loop ? l.stations[0] : null];
+            for (const o of new Set(nb.filter((x) => x && x !== st.id))) rows.push(`<button data-vst="${esc(o)}">${badge(l)}${esc(state.stations[o].name)}まで 約 ${fmtKm(segKm(segKey(st.id, o)))}</button>`);
+          }
+          return rows.length ? `<div class="vc-label">隣の駅まで（縮尺からの概算）</div><div class="vc-chips">${rows.join('')}</div>` : '';
+        })()
         + (lns.length ? `<div class="vc-label">乗り入れ路線</div><div class="vc-chips">${lns.map((l) => `<button data-vline="${esc(l.id)}">${badge(l)}${esc(l.name)}</button>`).join('')}</div>` : '<div class="vc-label">どの路線にも属していません</div>')
         + (trs.length ? `<div class="vc-label">乗り換え（連絡通路）</div><div class="vc-chips">${trs.map((o) => `<button data-vst="${esc(o.id)}">⇄ ${esc(o.name)}</button>`).join('')}</div>` : '');
     } else if (v?.type === 'line' && lineById(v.id)) {
       const l = lineById(v.id);
       const names = l.stations.map((id) => state.stations[id]).filter(Boolean);
-      h = `<div class="vc-head"><div><div class="vc-title">${badge(l)} ${esc(l.name)}</div><div class="vc-sub">${names.length}駅${l.loop ? '・環状線' : names.length > 1 ? `・${esc(names[0].name)} ⇔ ${esc(names[names.length - 1].name)}` : ''}</div></div><button class="vc-close" data-vclose title="閉じる">×</button></div>`
-        + `<div class="vc-route" style="--lc:${esc(l.color)}">${names.map((st) => `<button data-vst="${esc(st.id)}"><i></i>${esc(st.name)}</button>`).join('')}${l.loop && names.length ? `<button data-vst="${esc(names[0].id)}"><i></i>${esc(names[0].name)}</button>` : ''}</div>`;
+      const lk = lineKm(l);
+      const km = (v, d) => `<span class="vc-km">${v.toFixed(1)} km${d != null ? `<small>+${d.toFixed(1)}</small>` : ''}</span>`;
+      h = `<div class="vc-head"><div><div class="vc-title">${badge(l)} ${esc(l.name)}</div><div class="vc-sub">${names.length}駅${l.loop ? '・環状線' : names.length > 1 ? `・${esc(names[0].name)} ⇔ ${esc(names[names.length - 1].name)}` : ''}${names.length > 1 ? `・全長 約 ${fmtKm(lk.total)}` : ''}</div></div><button class="vc-close" data-vclose title="閉じる">×</button></div>`
+        + `<div class="vc-route" style="--lc:${esc(l.color)}">${names.map((st, i) => `<button data-vst="${esc(st.id)}"><i></i>${esc(st.name)}${km(lk.cum[i] || 0, i ? lk.cum[i] - lk.cum[i - 1] : null)}</button>`).join('')}${l.loop && names.length ? `<button data-vst="${esc(names[0].id)}"><i></i>${esc(names[0].name)}${km(lk.total, lk.closing)}</button>` : ''}</div>`
+        + '<div class="vc-label">距離は縮尺からの概算です（左：起点からの距離、＋：前の駅から）</div>';
     } else if (v?.type === 'landmark' && landmarkById(v.id)) {
       const l = landmarkById(v.id);
       h = `<div class="vc-head"><div><div class="vc-title">${LM[l.icon]?.g || ''} ${esc(l.name || LM[l.icon]?.n || 'ランドマーク')}</div><div class="vc-sub">${esc(LM[l.icon]?.n || '')}</div></div><button class="vc-close" data-vclose title="閉じる">×</button></div>`;
@@ -2163,7 +2214,7 @@
       save();
     };
   }
-  ['#setTitle', '#setBg', '#setWater', '#setFont', '#setGrid', '#setLegend', '#setScale'].forEach((s) => {
+  ['#setTitle', '#setBg', '#setWater', '#setFont', '#setGrid', '#setLegend', '#setScale', '#setMeters', '#setShowScale'].forEach((s) => {
     $(s).addEventListener('change', () => { settingsEditing.on = false; });
     $(s).addEventListener('blur', () => { settingsEditing.on = false; });
   });
@@ -2172,11 +2223,16 @@
   on('#setWater', 'input', settingInput((t) => { state.settings.waterColor = t.value; }));
   on('#setFont', 'input', settingInput((t) => { const v = Number(t.value); if (v >= 8 && v <= 40) state.settings.fontSize = v; }));
   on('#setScale', 'input', settingInput((t) => { state.settings.stationScale = Number(t.value); }));
+  on('#setMeters', 'input', settingInput((t) => {
+    const v = Number(t.value);
+    if (v > 0) { state.settings.mPerUnit = v / prefs.gridSize; renderScaleBar(); renderInspector(); renderViewCard(); }
+  }));
+  on('#setShowScale', 'input', settingInput((t) => { state.settings.showScale = t.checked; renderScaleBar(); settingsEditing.on = false; }));
   on('#setGrid', 'input', settingInput((t) => { state.settings.grid = t.checked; settingsEditing.on = false; }));
   on('#setLegend', 'input', settingInput((t) => { state.settings.showLegend = t.checked; settingsEditing.on = false; }));
 
   // 操作設定
-  on('#prefGrid', 'change', (e) => { prefs.gridSize = Number(e.target.value); savePrefs(); applyGrid(); renderInspector(); });
+  on('#prefGrid', 'change', (e) => { prefs.gridSize = Number(e.target.value); savePrefs(); applyGrid(); renderInspector(); renderSettings(); });
   on('#prefAutoName', 'change', (e) => { prefs.autoName = e.target.checked; savePrefs(); });
   on('#prefPrefix', 'input', (e) => { prefs.namePrefix = e.target.value.slice(0, 20); savePrefs(); });
   on('#prefBgDrag', 'change', (e) => { prefs.bgDrag = e.target.value; savePrefs(); });
@@ -2319,6 +2375,14 @@
         legend += `<text x="${x + 46}" y="${cy + 15}" font-size="14" fill="#1d2330">${esc(l.name)}</text>`;
       });
     }
+    let scaleSvg = '';
+    if (S.showScale) {
+      const m = niceNum(150 * S.mPerUnit), bw = m / S.mPerUnit;
+      const sx = W - pad - bw, sy = titleH + ch + pad * 2 - 18;
+      scaleSvg = `<g><rect x="${r1(sx - 8)}" y="${r1(sy - 22)}" width="${r1(bw + 16)}" height="34" rx="6" fill="#fff" fill-opacity="0.85"/>`
+        + `<path d="M${r1(sx)} ${r1(sy - 5)} V${r1(sy)} H${r1(sx + bw)} V${r1(sy - 5)}" fill="none" stroke="#1d2330" stroke-width="2"/>`
+        + `<text x="${r1(sx + bw / 2)}" y="${r1(sy - 9)}" font-size="12" text-anchor="middle" fill="#1d2330">${fmtLen(m)}</text></g>`;
+    }
     const title = S.title ? `<text x="${pad}" y="${pad + 8}" font-size="26" font-weight="700" fill="#1d2330">${esc(S.title)}</text>` : '';
     // 当たり判定用の透明な要素は書き出さない
     const clean = (html) => html.replace(/<line[^>]*stroke="transparent"[^>]*\/>/g, '');
@@ -2327,6 +2391,7 @@
 <rect width="100%" height="100%" fill="${esc(S.island ? S.waterColor : S.bg)}"/>
 ${title}
 <g transform="translate(${r1(tx)} ${r1(ty)})">${gTerrain.innerHTML}${gLines.innerHTML}${$('#gTransfers').innerHTML}<g font-family='${FONT}'>${gLandmarks.innerHTML.replace(/<circle r="[^"]*" fill="transparent"\/>/g, '')}</g>${clean(gStations.innerHTML)}${gLabels.innerHTML}</g>
+${scaleSvg}
 ${legend}
 </svg>`;
   }

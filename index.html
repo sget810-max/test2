@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>路線図メーカー</title>
   <meta name="description" content="架空の鉄道路線図をブラウザで作成・保存・書き出しできるエディタ">
-  <link rel="stylesheet" href="style.css?v=16">
+  <link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
   <header class="topbar">
@@ -116,6 +116,7 @@
       <div class="overlay title" id="mapTitle"></div>
       <div class="overlay legend" id="legend"></div>
       <div class="overlay hint" id="hint"></div>
+      <div class="overlay scale-bar" id="scaleBar" hidden></div>
       <div class="overlay zoom">
         <button id="zoomIn" title="拡大">＋</button>
         <button id="zoomOut" title="縮小">－</button>
@@ -156,6 +157,11 @@
         </label>
         <label class="check"><input type="checkbox" id="setGrid"> グリッドを表示</label>
         <label class="check"><input type="checkbox" id="setLegend"> 凡例を表示</label>
+        <label class="field">縮尺（1マスの長さ）
+          <span class="row" style="align-items:center;gap:6px"><span style="white-space:nowrap">1マス ＝</span><input type="number" id="setMeters" min="0" step="any" inputmode="decimal"><span>m</span></span>
+        </label>
+        <label class="check"><input type="checkbox" id="setShowScale"> 縮尺バーを表示</label>
+        <p class="muted">駅間距離は、この縮尺と線路の形（曲がりも含む）から概算します。</p>
       </section>
 
       <section class="panel">
@@ -199,6 +205,6 @@
     </aside>
   </main>
 
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

@@ -23,6 +23,8 @@
     'water-fill': '囲むように描くと、内側を水域で塗りつぶします',
     'land-brush': 'なぞった所を陸地に戻す（海岸線や川岸の調整に）',
     'land-fill': '囲むように描くと、内側を陸地に戻します',
+    'water-grid': 'タップ・なぞったマス目を水域にします（太さで一度に塗るマス数を変更）',
+    'land-grid': 'タップ・なぞったマス目を陸地に戻します（太さで一度に塗るマス数を変更）',
     landmark: 'タップでランドマークを配置 ／ ドラッグで移動 ／ ダブルタップで名前を編集',
   };
   const HINTS = {
@@ -185,20 +187,35 @@
     if (!/^#[0-9a-f]{6}$/i.test(s.settings.waterColor)) s.settings.waterColor = defaultSettings().waterColor;
     const T = raw.terrain || {};
     s.terrain.shapes = (Array.isArray(T.shapes) ? T.shapes : [])
-      .filter((sh) => sh && (sh.t === 'water' || sh.t === 'land') && Array.isArray(sh.p) && sh.p.length >= 2 && sh.p.length % 2 === 0 && sh.p.every(Number.isFinite))
-      .map((sh) => ({ t: sh.t, f: !!sh.f, w: clamp(Number(sh.w) || 0, 0, 400), p: sh.p.slice() }));
+      .filter((sh) => sh && (sh.t === 'water' || sh.t === 'land'))
+      .map((sh) => {
+        if (Array.isArray(sh.c)) {
+          const g = clamp(Number(sh.g) || 20, 5, 200);
+          const c = sh.c.filter(Number.isInteger);
+          return c.length >= 2 && c.length % 2 === 0 ? { t: sh.t, g, c } : null;
+        }
+        if (!Array.isArray(sh.p) || sh.p.length < 2 || sh.p.length % 2 || !sh.p.every(Number.isFinite)) return null;
+        return { t: sh.t, f: !!sh.f, w: clamp(Number(sh.w) || 0, 0, 400), p: sh.p.slice() };
+      })
+      .filter(Boolean);
     s.terrain.landmarks = (Array.isArray(T.landmarks) ? T.landmarks : [])
       .filter((l) => l && Number.isFinite(l.x) && Number.isFinite(l.y))
       .map((l) => ({ id: String(l.id || uid('m')), x: l.x, y: l.y, icon: LM[l.icon] ? l.icon : 'star', name: String(l.name ?? '') }));
     return s;
   }
 
+  function saveNow() {
+    clearTimeout(save.timer);
+    save.timer = null;
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (_) { /* 保存不可 */ }
+  }
   function save() {
     clearTimeout(save.timer);
-    save.timer = setTimeout(() => {
-      try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (_) { /* 保存不可 */ }
-    }, 300);
+    save.timer = setTimeout(saveNow, 300);
   }
+  // ページを閉じる・切り替える直前に保存し損ねないようにする
+  window.addEventListener('pagehide', () => { if (save.timer) saveNow(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && save.timer) saveNow(); });
 
   function load() {
     try {
@@ -611,6 +628,12 @@
 
   function shapeMarkup(sh, preview) {
     const col = sh.t === 'water' ? state.settings.waterColor : state.settings.bg;
+    if (sh.c) {
+      const g = sh.g;
+      let d = '';
+      for (let i = 0; i < sh.c.length; i += 2) d += `M${sh.c[i] * g} ${sh.c[i + 1] * g}h${g}v${g}h${-g}Z`;
+      return `<path d="${d}" fill="${esc(col)}" stroke="${esc(col)}" stroke-width="0.6" shape-rendering="crispEdges"${preview ? ' fill-opacity="0.75"' : ''}/>`;
+    }
     const pts = unflat(sh.p);
     if (sh.f) {
       if (preview) return `<path d="${smoothPath(pts, true)}" fill="${esc(col)}" fill-opacity="0.6" stroke="#0b8fd6" stroke-width="${r1(2 / view.k)}" stroke-dasharray="${r1(6 / view.k)} ${r1(4 / view.k)}"/>`;
@@ -624,8 +647,10 @@
     renderTerrainPreview();
   }
   function renderTerrainPreview() {
-    gTerrainPreview.innerHTML = drag?.type === 'paint'
-      ? shapeMarkup({ t: drag.kind, f: drag.fill, w: drag.w, p: drag.pts.flat() }, true) : '';
+    if (drag?.type !== 'paint') { gTerrainPreview.innerHTML = ''; return; }
+    gTerrainPreview.innerHTML = drag.grid
+      ? shapeMarkup({ t: drag.kind, g: drag.g, c: [...drag.cells].flatMap((k) => k.split(',').map(Number)) }, true)
+      : shapeMarkup({ t: drag.kind, f: drag.fill, w: drag.w, p: drag.pts.flat() }, true);
   }
 
   function landmarkMarkup(l) {
@@ -647,7 +672,7 @@
     gLandmarks.setAttribute('font-family', FONT);
     const S = state.settings;
     bgRect.setAttribute('fill', S.bg);
-    gridRect.style.display = S.grid ? '' : 'none';
+    gridRect.style.display = S.grid || (mode === 'terrain' && paintStyle === 'grid' && terrainTool !== 'landmark') ? '' : 'none';
 
     let lh = '', hh = '';
     for (let i = state.lines.length - 1; i >= 0; i--) {
@@ -828,7 +853,7 @@
     inspector.innerHTML = `
       <h2>地形エディター</h2>
       <p class="muted">
-        <b>🌊 水域</b>: 海・川・湖を塗ります。「ブラシ」はなぞった所を、「囲んで塗る」は囲んだ内側を塗ります。<br>
+        <b>🌊 水域</b>: 海・川・湖を塗ります。「ブラシ」はなぞった所を、「囲んで塗る」は囲んだ内側を、「マス目」はグリッドのマスごとに塗ります（マスの大きさは操作設定のグリッド間隔、一度に塗るマス数は太さで変更）。<br>
         <b>🟩 陸地</b>: 水域を消して陸地に戻します。海岸線や川岸の形を整えるのに使います。<br>
         <b>📍 ランドマーク</b>: 種類を選んでタップで配置。ドラッグで移動、ダブルタップで名前を編集。<br>
         描いている間は2本指（パソコンは右ドラッグ／Space+ドラッグ）で画面を動かせます。
@@ -1127,6 +1152,10 @@
         return;
       }
       drag = { type: 'paint', kind: terrainTool, fill: paintStyle === 'fill', w: brushSize, pts: [[w.x, w.y]], sp, lastSp: sp };
+      if (paintStyle === 'grid') {
+        Object.assign(drag, { grid: true, g: prefs.gridSize, n: clamp(Math.round(brushSize / prefs.gridSize), 1, 8), cells: new Set() });
+        addCells(drag, w);
+      }
       renderTerrainPreview();
       return;
     }
@@ -1204,6 +1233,12 @@
 
     if (drag.type === 'paint') {
       if (Math.hypot(sp.x - drag.lastSp.x, sp.y - drag.lastSp.y) < 3) return;
+      if (drag.grid) {
+        // 速くなぞってもマスが飛ばないよう補間する
+        const [px, py] = drag.pts[drag.pts.length - 1];
+        const steps = Math.max(1, Math.ceil(Math.hypot(w.x - px, w.y - py) / (drag.g / 2)));
+        for (let i = 1; i <= steps; i++) addCells(drag, { x: px + (w.x - px) * i / steps, y: py + (w.y - py) * i / steps });
+      }
       drag.pts.push([w.x, w.y]);
       drag.lastSp = sp;
       renderTerrainPreview();
@@ -1288,7 +1323,20 @@
     return false;
   }
 
+  function addCells(d, w) {
+    const cx = Math.floor(w.x / d.g), cy = Math.floor(w.y / d.g);
+    const o = Math.floor((d.n - 1) / 2);
+    for (let i = 0; i < d.n; i++) for (let j = 0; j < d.n; j++) d.cells.add(`${cx - o + i},${cy - o + j}`);
+  }
+
   function finishPaint(d) {
+    if (d.grid) {
+      if (!d.cells.size) return;
+      pushUndo();
+      state.terrain.shapes.push({ t: d.kind, g: d.g, c: [...d.cells].flatMap((k) => k.split(',').map(Number)) });
+      commit();
+      return;
+    }
     let pts = d.pts.map((p) => [Math.round(p[0]), Math.round(p[1])]);
     if (d.fill && pts.length < 3) { renderTerrainPreview(); return; }
     if (pts.length === 1) pts.push(pts[0].slice());
@@ -1693,7 +1741,7 @@
     renderTerrainControls(); renderMap(); renderInspector();
   }));
   document.querySelectorAll('[data-pstyle]').forEach((b) => b.addEventListener('click', () => {
-    paintStyle = b.dataset.pstyle; renderTerrainControls(); renderOverlays();
+    paintStyle = b.dataset.pstyle; renderTerrainControls(); renderMap();
   }));
   $('#brushSize').addEventListener('input', (e) => { brushSize = Number(e.target.value); });
   $('#lmPalette').addEventListener('click', (e) => {
@@ -1772,6 +1820,13 @@
     const groups = [gLines, gLandmarks, gStations, gLabels];
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const sh of state.terrain.shapes) {
+      if (sh.c) {
+        for (let i = 0; i < sh.c.length; i += 2) {
+          x0 = Math.min(x0, sh.c[i] * sh.g); x1 = Math.max(x1, (sh.c[i] + 1) * sh.g);
+          y0 = Math.min(y0, sh.c[i + 1] * sh.g); y1 = Math.max(y1, (sh.c[i + 1] + 1) * sh.g);
+        }
+        continue;
+      }
       const h = sh.f ? 0 : sh.w / 2;
       for (let i = 0; i < sh.p.length; i += 2) {
         x0 = Math.min(x0, sh.p[i] - h); x1 = Math.max(x1, sh.p[i] + h);

@@ -14,8 +14,8 @@
   const HINTS = {
     select: 'ダブルクリック（タップ）で駅を追加 ／ 駅をドラッグで移動（他の駅に重ねると乗換駅に統合）／ 背景ドラッグで範囲選択',
     range: 'ドラッグで範囲選択（Shiftで追加）／ 駅をタップで選択に追加・解除 ／ 選んだ駅はまとめて移動できます',
-    station: 'クリックで駅を追加 ／ 路線の上をクリックするとその区間に駅を挿入',
-    line: '駅を順にクリックして路線を延長（Shift+クリックで起点側）／ 空白クリックで新駅を作成して延長',
+    station: 'ダブルクリック（タップ）で駅を追加 ／ 路線の上をダブルクリックするとその区間に駅を挿入',
+    line: '駅を順にクリックして路線を延長（Shift+クリックで起点側）／ 空白をダブルクリックで新駅を作成して延長',
     delete: '駅または路線をクリックして削除',
   };
 
@@ -909,6 +909,7 @@
   // ---------- ポインタ操作 ----------
   /** 背景をドラッグしたときの動作 */
   function bgDragKind(e) {
+    if (mode === 'line') return 'pan';
     if (mode === 'range') return 'marquee';
     if (e.shiftKey) return 'marquee';
     if (prefs.bgDrag === 'select') return 'marquee';
@@ -981,11 +982,7 @@
         return;
       }
       if (mode === 'station') {
-        pushUndo();
-        const { st, created } = placeStation(w, seg);
-        selectStations([st.id]);
-        commit();
-        if (created && prefs.autoName) openNameEditor(st.id, true);
+        startBgDrag(e, sp, w, { tap: { kind: 'line', seg, sp, w } });
         return;
       }
       if (mode === 'select') {
@@ -998,27 +995,9 @@
       // 路線/範囲モードでは線の上も背景と同じ扱い
     }
 
-    // 背景
+    // 背景（駅の作成はダブルクリックで行う）
     if (mode === 'station' || mode === 'line') {
-      const x = snap(w.x), y = snap(w.y);
-      const existing = stationNear(x, y);
-      if (mode === 'station') {
-        if (existing) { selectStations([existing.id]); renderAll(); return; }
-        pushUndo();
-        const st = createStation(x, y);
-        selectStations([st.id]);
-        commit();
-        if (prefs.autoName) openNameEditor(st.id, true);
-      } else {
-        if (existing) { if (extendLine(existing.id, e.shiftKey)) commit(); return; }
-        pushUndo();
-        const st = createStation(x, y);
-        let ln = activeLine();
-        if (!ln) ln = createLine();
-        if (e.shiftKey) ln.stations.unshift(st.id); else ln.stations.push(st.id);
-        sel = { type: 'line', id: ln.id, seg: null };
-        commit();
-      }
+      startBgDrag(e, sp, w, { tap: { kind: 'bg', sp, w, shift: e.shiftKey } });
       return;
     }
     startBgDrag(e, sp, w, { clickDeselect: true, tap: { kind: 'bg', sp, w } });
@@ -1115,7 +1094,20 @@
 
   function onDoubleTap(tap) {
     if (tap.kind === 'station') { openNameEditor(tap.id); return; }
-    if (mode !== 'select') return;
+    if (mode === 'line') {
+      const x = snap(tap.w.x), y = snap(tap.w.y);
+      const existing = stationNear(x, y);
+      if (existing) { if (extendLine(existing.id, tap.shift)) commit(); return; }
+      pushUndo();
+      const st = createStation(x, y);
+      const ln = activeLine() || createLine();
+      if (tap.shift) ln.stations.unshift(st.id); else ln.stations.push(st.id);
+      sel = { type: 'line', id: ln.id, seg: null };
+      commit();
+      if (prefs.autoName) openNameEditor(st.id, true);
+      return;
+    }
+    if (!['select', 'station', 'range'].includes(mode)) return;
     pushUndo();
     const { st, created } = placeStation(tap.w, tap.kind === 'line' ? tap.seg : null);
     selectStations([st.id]);

@@ -28,7 +28,7 @@
     select: 'ダブルクリック（タップ）で駅を追加 ／ 駅をドラッグで移動（他の駅に重ねると乗換駅に統合）／ 背景ドラッグで範囲選択',
     range: 'ドラッグで範囲選択（Shiftで追加）／ 駅をタップで選択に追加・解除 ／ 選んだ駅はまとめて移動できます',
     station: 'ダブルクリック（タップ）で駅を追加 ／ 路線の上をダブルクリックするとその区間に駅を挿入',
-    line: '駅をクリックで路線を延長（Shift+クリックで起点側）／ 線をタップで駅間を選び、ダブルクリックした場所を通るように曲げる（□はドラッグで移動・ダブルクリックで削除）',
+    line: '駅をクリックで路線を延長（Shift+クリックで起点側）／ 線をタップで駅間を選び、ダブルクリックした場所を通るように曲げる（□はドラッグで移動・ダブルクリックで駅にする）',
     delete: '駅または路線をクリックして削除',
   };
 
@@ -1209,7 +1209,7 @@
         <div class="btn-row">
           ${['折れ線1', '折れ線2', '直線', '曲線'].map((t, i) => `<button class="small ${cur === i ? 'primary' : ''}" data-act="bend" data-bend="${i}">${t}</button>`).join('')}
         </div>
-        <span class="muted">経由点: ${nwp}個 ${nwp ? '<button class="small" data-act="wp-clear">経由点をすべて消す</button>' : ''}<br>「路線」ツールで線をタップして駅間を選び、ダブルタップした場所を通るように曲げられます（線をドラッグしてもOK）。□はドラッグで移動、ダブルタップで削除。</span>
+        <span class="muted">経由点: ${nwp}個 ${nwp ? '<button class="small" data-act="wp-clear">経由点をすべて消す</button>' : ''}<br>「路線」ツールで線をタップして駅間を選び、ダブルタップした場所を通るように曲げられます（線をドラッグしてもOK）。□はドラッグで移動、ダブルタップで駅にする。</span>
       </div>`;
     })();
     inspector.innerHTML = `
@@ -1843,6 +1843,29 @@
     toast(`「${ln.name}」の ${state.stations[a].name}–${state.stations[b].name} 間をここに通しました`);
   }
 
+  /** 経由点を駅にする。駅間をその駅で2つに分け、曲がり方と残りの経由点を引き継ぐ */
+  function waypointToStation(key, idx) {
+    const list = state.waypoints[key];
+    const p = list?.[idx];
+    if (!p) return;
+    const [a, b] = key.split('|'); // 正規化キー: 経由点は a→b の順
+    pushUndo();
+    const near = stationNear(p[0], p[1]);
+    const st = near && near.id !== a && near.id !== b ? near : createStation(p[0], p[1]);
+    const before = list.slice(0, idx), after = list.slice(idx + 1);
+    const bend = state.bends[key];
+    insertIntoSegment(key, st); // この区間の経由点・曲がり方はいったん消える
+    const k1 = segKey(a, st.id), k2 = segKey(st.id, b);
+    const setWp = (k, from, pts) => { if (pts.length) state.waypoints[k] = k.split('|')[0] === from ? pts : pts.slice().reverse(); };
+    setWp(k1, a, before);
+    setWp(k2, st.id, after);
+    if (bend) { state.bends[k1] = bend; state.bends[k2] = bend; }
+    if (sel?.type === 'line') sel.seg = null;
+    commit();
+    toast(`経由点を駅「${st.name}」にしました`);
+    if (st !== near && prefs.autoName) openNameEditor(st.id, true);
+  }
+
   function finishPaint(d) {
     if (d.grid) {
       if (!d.cells.size) return;
@@ -1870,14 +1893,7 @@
 
   function onDoubleTap(tap) {
     if (tap.kind === 'landmark') { openNameEditor(tap.id, false, 'landmark'); return; }
-    if (tap.kind === 'wp') {
-      pushUndo();
-      const list = state.waypoints[tap.key];
-      if (list) { list.splice(tap.idx, 1); if (!list.length) delete state.waypoints[tap.key]; }
-      commit();
-      toast('経由点を削除しました');
-      return;
-    }
+    if (tap.kind === 'wp') { waypointToStation(tap.key, tap.idx); return; }
     if (tap.kind === 'station') { openNameEditor(tap.id); return; }
     if (mode === 'line') { addRoutePoint(tap.w); return; }
     if (!['select', 'station', 'range'].includes(mode)) return;

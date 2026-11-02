@@ -67,6 +67,7 @@
   let cellN = 1; // 一度に塗るマス数(一辺)
   let lmIcon = 'temple';
   let modeBeforeTerrain = 'select';
+  let pickTransferFrom = null; // 乗り換え相手を選んでいる駅
 
   // ---------- ユーティリティ ----------
   const uid = (p) => p + Math.random().toString(36).slice(2, 9);
@@ -113,7 +114,7 @@
   }
 
   function emptyState() {
-    return { version: 1, stations: {}, lines: [], bends: {}, waypoints: {}, terrain: { shapes: [], landmarks: [] }, settings: defaultSettings() };
+    return { version: 1, stations: {}, lines: [], bends: {}, waypoints: {}, transfers: [], terrain: { shapes: [], landmarks: [] }, settings: defaultSettings() };
   }
 
   function sampleState() {
@@ -123,7 +124,7 @@
     add('nishiminato', '西港', 'Nishi-minato', -360, 0, 4);
     add('minatomachi', '港町', 'Minatomachi', -180, 0, 4);
     add('chuo', '中央', 'Chuō', 0, 0, 3);
-    Object.assign(s.stations.chuo, { terminal: true, tw: 80, th: 40 });
+    s.stations.chuo.terminal = true;
     add('higashimachi', '東町', 'Higashimachi', 180, 0, 3);
     add('higashiyama', '東山', 'Higashiyama', 340, -100, 2);
     add('kitayama', '北山', 'Kitayama', -80, -300, 2);
@@ -198,7 +199,7 @@
         id, name: String(st.name ?? ''), sub: String(st.sub ?? ''),
         x: Number(st.x) || 0, y: Number(st.y) || 0,
         label: Number.isInteger(st.label) && st.label >= -1 && st.label < 8 ? st.label : -1,
-        ...(st.terminal ? { terminal: true, tw: clamp(Number(st.tw) || 80, 20, 400), th: clamp(Number(st.th) || 40, 20, 400) } : {}),
+        ...(st.terminal ? { terminal: true } : {}),
       };
     }
     s.lines = raw.lines.filter(Boolean).map((ln, i) => ({
@@ -214,6 +215,9 @@
     if (raw.bends && typeof raw.bends === 'object') {
       for (const [k, v] of Object.entries(raw.bends)) if ([1, 2, 3].includes(v)) s.bends[k] = v;
     }
+    s.transfers = (Array.isArray(raw.transfers) ? raw.transfers : [])
+      .filter((t) => t && s.stations[t.a] && s.stations[t.b] && t.a !== t.b)
+      .map((t) => ({ id: String(t.id || uid('t')), a: t.a, b: t.b }));
     s.waypoints = {};
     if (raw.waypoints && typeof raw.waypoints === 'object') {
       for (const [k, v] of Object.entries(raw.waypoints)) {
@@ -303,6 +307,7 @@
     }
     if (sel?.type === 'line' && !lineById(sel.id)) sel = null;
     if (sel?.type === 'landmark' && !landmarkById(sel.id)) sel = null;
+    if (pickTransferFrom && !state.stations[pickTransferFrom]) pickTransferFrom = null;
     if (activeLineId && !lineById(activeLineId)) activeLineId = null;
   }
 
@@ -331,7 +336,6 @@
     let best = null, bd = 6;
     for (const s of Object.values(state.stations)) {
       if (s.id === excludeId) continue;
-      if (s.terminal && Math.abs(x - s.x) <= s.tw / 2 && Math.abs(y - s.y) <= s.th / 2) return s;
       const d = Math.hypot(s.x - x, s.y - y);
       if (d <= bd) { bd = d; best = s; }
     }
@@ -377,6 +381,7 @@
       ln.stations = ln.stations.filter((s) => !set.has(s));
       tidyLine(ln);
     }
+    state.transfers = state.transfers.filter((t) => !set.has(t.a) && !set.has(t.b));
     cleanBends();
     validateSelection();
   }
@@ -407,10 +412,8 @@
     if (!st) return;
     if (on) {
       st.terminal = true;
-      st.tw = st.tw || prefs.gridSize * 4;
-      st.th = st.th || prefs.gridSize * 2;
     } else {
-      delete st.terminal; delete st.tw; delete st.th;
+      delete st.terminal;
     }
   }
 
@@ -424,7 +427,19 @@
       tidyLine(ln);
     }
     delete state.stations[fromId];
+    for (const t of state.transfers) { if (t.a === fromId) t.a = toId; if (t.b === fromId) t.b = toId; }
+    state.transfers = state.transfers.filter((t, i, arr) => t.a !== t.b && arr.findIndex((u) => sameTransfer(u, t)) === i);
     cleanBends();
+  }
+
+  // ---- 乗り換え（離れた駅どうしの連絡）
+  const sameTransfer = (u, t) => (u.a === t.a && u.b === t.b) || (u.a === t.b && u.b === t.a);
+  const transfersOf = (id) => state.transfers.filter((t) => t.a === id || t.b === id);
+  function addTransfer(a, b) {
+    if (a === b || !state.stations[a] || !state.stations[b]) return false;
+    if (state.transfers.some((u) => sameTransfer(u, { a, b }))) return false;
+    state.transfers.push({ id: uid('t'), a, b });
+    return true;
   }
 
   /** 路線を延長。変更があれば true */
@@ -674,46 +689,38 @@
   }
 
   function stationShape(st) {
-    if (st.terminal) return { p1: [st.x, st.y], p2: [st.x, st.y], R: 0, rect: { w: st.tw, h: st.th } };
     const pts = geom.stPts[st.id] || [[st.x, st.y]];
     const [p1, p2] = farthestPair(pts);
-    const R = stationRadius(geom.stLines[st.id] || []);
+    let R = stationRadius(geom.stLines[st.id] || []);
+    if (st.terminal) R += 4 * (state.settings.stationScale || 1); // 二重丸のぶん大きく
     return { p1, p2, R };
   }
 
-  function terminalMarkup(st) {
-    const W = st.tw, H = st.th, x = st.x - W / 2, y = st.y - H / 2;
-    const fs = state.settings.fontSize;
-    const nameFs = r1(clamp(Math.min(fs * 1.25, (W - 10) / Math.max(1, [...st.name].length) * 1.05), 8, fs * 1.6));
-    const subFs = r1(Math.min(fs * 0.62, (W - 8) / Math.max(1, st.sub.length) * 1.8));
-    const showSub = st.sub && H >= nameFs + subFs + 8;
-    const ny = st.y + (showSub ? -subFs / 2 - 1 : 0);
-    let t = `<rect x="${r1(x - 7)}" y="${r1(y - 7)}" width="${r1(W + 14)}" height="${r1(H + 14)}" fill="transparent"/>`
-      + `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(W)}" height="${r1(H)}" rx="${r1(Math.min(8, H / 4))}" fill="#fff" stroke="#222" stroke-width="3.5"/>`
-      + `<rect x="${r1(x + 4)}" y="${r1(y + 4)}" width="${r1(W - 8)}" height="${r1(H - 8)}" rx="${r1(Math.min(5, H / 5))}" fill="none" stroke="#222" stroke-width="1"/>`;
-    if (st.name) t += `<text x="${r1(st.x)}" y="${r1(ny)}" font-size="${nameFs}" font-weight="800" text-anchor="middle" dominant-baseline="central" fill="#1d2330">${esc(st.name)}</text>`;
-    if (showSub) t += `<text x="${r1(st.x)}" y="${r1(ny + nameFs / 2 + subFs / 2 + 2)}" font-size="${subFs}" text-anchor="middle" dominant-baseline="central" fill="#5b6472">${esc(st.sub)}</text>`;
-    return t;
-  }
-
   function stationMarkup(st) {
-    if (st.terminal) return terminalMarkup(st);
     const lns = geom.stLines[st.id] || [];
     const { p1, p2, R } = stationShape(st);
-    const inter = lns.length >= 2;
+    const inter = lns.length >= 2 || st.terminal || transfersOf(st.id).length > 0;
     const ring = inter ? '#222' : (lns[0]?.color || '#888');
     const bw = inter ? 2.5 : Math.max(2, R * 0.5);
     // タッチしやすいように透明な当たり判定を少し大きめに
     const hit = `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="transparent" stroke-width="${r1(2 * R + 14)}" stroke-linecap="round"/>`;
-    if (dist(p1, p2) < 0.5) {
-      return hit + `<circle cx="${r1(p1[0])}" cy="${r1(p1[1])}" r="${r1(R)}" fill="#fff" stroke="${ring}" stroke-width="${r1(bw)}"/>`;
-    }
     const line = (w, c) => `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="${c}" stroke-width="${r1(w)}" stroke-linecap="round"/>`;
-    return hit + line(2 * R + bw, ring) + line(2 * R - bw, '#fff');
+    const point = dist(p1, p2) < 0.5;
+    // ターミナル駅は内側にもう1つ輪を描いて二重丸にする
+    const inner = st.terminal ? (() => {
+      const ri = R * 0.5, iw = Math.max(1.6, R * 0.16);
+      return point
+        ? `<circle cx="${r1(p1[0])}" cy="${r1(p1[1])}" r="${r1(ri)}" fill="none" stroke="#222" stroke-width="${r1(iw)}"/>`
+        : line(2 * ri + iw, '#222') + line(2 * ri - iw, '#fff');
+    })() : '';
+    if (point) {
+      return hit + `<circle cx="${r1(p1[0])}" cy="${r1(p1[1])}" r="${r1(R)}" fill="#fff" stroke="${ring}" stroke-width="${r1(bw)}"/>` + inner;
+    }
+    return hit + line(2 * R + bw, ring) + line(2 * R - bw, '#fff') + inner;
   }
 
   function labelMarkup(st) {
-    if (st.terminal || (!st.name && !st.sub)) return '';
+    if (!st.name && !st.sub) return '';
     const fs = state.settings.fontSize;
     const subFs = Math.round(fs * 0.62 * 10) / 10;
     const dirIdx = st.label >= 0 ? st.label : autoLabelDir(st.id);
@@ -826,6 +833,11 @@
       if (lab) th += `<g data-station="${esc(st.id)}">${lab}</g>`;
     }
     gStations.innerHTML = sh;
+    $('#gTransfers').innerHTML = state.transfers.map((t) => {
+      const A = state.stations[t.a], B = state.stations[t.b];
+      return `<g data-transfer="${esc(t.id)}"><line x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke="#222" stroke-width="11" stroke-linecap="round"/>`
+        + `<line x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g>`;
+    }).join('');
     gLabels.innerHTML = th;
     gLabels.setAttribute('font-family', FONT);
     gStations.setAttribute('font-family', FONT);
@@ -871,12 +883,7 @@
       if (l) over += `<circle cx="${r1(l.x)}" cy="${r1(l.y)}" r="${r1(14 * (state.settings.stationScale || 1) + 7)}" fill="#1f6feb" fill-opacity="0.25" pointer-events="none"/>`;
     } else {
       for (const id of selIds()) {
-        const st0 = state.stations[id];
-        if (st0.terminal) {
-          over += `<rect x="${r1(st0.x - st0.tw / 2 - 7)}" y="${r1(st0.y - st0.th / 2 - 7)}" width="${r1(st0.tw + 14)}" height="${r1(st0.th + 14)}" rx="10" fill="#1f6feb" fill-opacity="0.25" pointer-events="none"/>`;
-          continue;
-        }
-        const { p1, p2, R } = stationShape(st0);
+        const { p1, p2, R } = stationShape(state.stations[id]);
         over += `<line x1="${r1(p1[0])}" y1="${r1(p1[1])}" x2="${r1(p2[0])}" y2="${r1(p2[1])}" stroke="#1f6feb" stroke-opacity="0.35" stroke-width="${r1(2 * R + 14)}" stroke-linecap="round" pointer-events="none"/>`;
       }
     }
@@ -923,6 +930,10 @@
     if (mode === 'line' && sel?.type === 'line' && sel.seg && ln && sel.id === ln.id) {
       const [a, b] = sel.seg.split('|');
       if (state.stations[a] && state.stations[b]) hint = `【${ln.name}：${state.stations[a].name}–${state.stations[b].name} 間を選択中】ダブルクリックした場所を通るように曲げる ／ 別の駅間はタップで選び直し`;
+    }
+    if (pickTransferFrom && state.stations[pickTransferFrom]) {
+      $('#hint').textContent = `【乗り換え設定】「${state.stations[pickTransferFrom].name}」とつなぐ駅をタップ（Escでキャンセル）`;
+      return;
     }
     if (mode === 'terrain') hint = '【地形】' + TERRAIN_HINTS[terrainTool];
     if (n > 1 && (mode === 'select' || mode === 'range')) hint = `${n}駅を選択中 ／ ドラッグでまとめて移動・矢印キーで微調整・Deleteで削除`;
@@ -985,10 +996,18 @@
           <button data-act="kind" data-kind="terminal" class="${st.terminal ? 'active' : ''}">🚉 ターミナル駅</button>
         </div>
       </div>
-      ${st.terminal ? `<div class="row">
-        <div class="field">幅（マス）<div class="stepper"><button data-act="tsize" data-dim="tw" data-d="-1">－</button><span>${Math.round(st.tw / prefs.gridSize)}</span><button data-act="tsize" data-dim="tw" data-d="1">＋</button></div></div>
-        <div class="field">高さ（マス）<div class="stepper"><button data-act="tsize" data-dim="th" data-d="-1">－</button><span>${Math.round(st.th / prefs.gridSize)}</span><button data-act="tsize" data-dim="th" data-d="1">＋</button></div></div>
-      </div>` : `<div class="field">駅名の位置 ${dirGrid(st.label, auto)}</div>`}
+      <div class="field">駅名の位置 ${dirGrid(st.label, auto)}</div>
+      <div class="field">乗り換え（離れた駅とつなぐ）
+        ${transfersOf(st.id).length ? `<ul class="st-list">${transfersOf(st.id).map((t) => {
+          const o = state.stations[t.a === st.id ? t.b : t.a];
+          return `<li><span class="idx">⇄</span><span class="nm" data-act="goto-station" data-id="${esc(o.id)}">${esc(o.name)}</span><button data-act="transfer-remove" data-id="${esc(t.id)}" title="乗り換えを解除">解除</button></li>`;
+        }).join('')}</ul>` : ''}
+        <div class="btn-row">
+          ${pickTransferFrom === st.id
+            ? '<button class="small" data-act="transfer-cancel">キャンセル</button><span class="muted">つなぐ駅をタップしてください</span>'
+            : '<button class="small primary" data-act="transfer-pick">＋ 乗り換え駅を追加</button>'}
+        </div>
+      </div>
       <div class="field">所属路線
         ${lns.length ? `<ul class="st-list">${lns.map((l) => `
           <li><span class="badge" style="background:${esc(l.color)}">${esc(l.code || '　')}</span>
@@ -1072,6 +1091,7 @@
       <div class="field">路線
         <div class="btn-row">
           <button class="small primary" data-act="line-from-selection" ${ids.length < 2 ? 'disabled' : ''}>選んだ駅で新しい路線を作る</button>
+          ${ids.length === 2 ? '<button class="small" data-act="transfer-link">⇄ この2駅を乗り換え駅にする</button>' : ''}
         </div>
       </div>
       <div class="btn-row">
@@ -1357,6 +1377,19 @@
         drag = { type: 'waypoint', key, idx, sp, start: w, orig: p.slice(), moved: false, tap: { kind: 'wp', key, idx, sp } };
         return;
       }
+    }
+
+    if (stEl && pickTransferFrom && mode !== 'terrain') {
+      const id = stEl.dataset.station, from = pickTransferFrom;
+      pickTransferFrom = null;
+      if (id === from) { renderInspector(); renderOverlays(); toast('別の駅をタップしてください'); pickTransferFrom = from; return; }
+      pushUndo();
+      if (addTransfer(from, id)) {
+        selectStations([from]);
+        commit();
+        toast(`「${state.stations[from].name}」と「${state.stations[id].name}」を乗り換え駅にしました`);
+      } else { undoStack.pop(); updateUndoButtons(); renderInspector(); toast('すでに乗り換え駅です'); }
+      return;
     }
 
     if (stEl) {
@@ -1775,7 +1808,7 @@
     else if (k === 'l') setMode('line');
     else if (k === 'd') setMode('delete');
     else if (k === 'enter' && ids.length === 1) { e.preventDefault(); openNameEditor(ids[0]); }
-    else if (k === 'escape') { sel = null; if (mode !== 'select') setMode('select'); renderMap(); renderInspector(); }
+    else if (k === 'escape') { pickTransferFrom = null; sel = null; if (mode !== 'select') setMode('select'); renderMap(); renderInspector(); }
     else if (k === 'delete' || k === 'backspace') {
       if (ids.length) { pushUndo(); deleteStations(ids); commit(); }
       else if (sel?.type === 'landmark') { pushUndo(); state.terrain.landmarks = state.terrain.landmarks.filter((l) => l.id !== sel.id); sel = null; commit(); }
@@ -1902,15 +1935,25 @@
         commit();
         return;
       }
-      if (act === 'tsize') {
-        const st = state.stations[ids[0]], g = prefs.gridSize;
-        const v = clamp(Math.round(st[b.dataset.dim] / g) + Number(b.dataset.d), 1, 20) * g;
-        if (v === st[b.dataset.dim]) return;
+      if (act === 'transfer-pick') {
+        pickTransferFrom = ids[0];
+        renderInspector(); renderOverlays();
+        toast('乗り換えでつなぐ駅をタップしてください');
+        return;
+      }
+      if (act === 'transfer-cancel') { pickTransferFrom = null; renderInspector(); renderOverlays(); return; }
+      if (act === 'transfer-remove') {
         pushUndo();
-        st[b.dataset.dim] = v;
+        state.transfers = state.transfers.filter((t) => t.id !== b.dataset.id);
         commit();
         return;
       }
+      if (act === 'transfer-link') {
+        pushUndo();
+        if (addTransfer(ids[0], ids[1])) { commit(); toast('乗り換え駅に設定しました'); } else { undoStack.pop(); updateUndoButtons(); toast('すでに乗り換え駅です'); }
+        return;
+      }
+      if (act === 'goto-station') { selectStations([b.dataset.id]); renderAll(); return; }
       if (act === 'label') {
         pushUndo();
         for (const id of ids) state.stations[id].label = Number(b.dataset.dir);
@@ -2117,7 +2160,7 @@
 
   // ---------- 書き出し ----------
   function buildExportSVG() {
-    const groups = [gLines, gLandmarks, gStations, gLabels];
+    const groups = [gLines, $('#gTransfers'), gLandmarks, gStations, gLabels];
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const sh of state.terrain.shapes) {
       if (sh.c) {
@@ -2174,7 +2217,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family='${FONT}'>
 <rect width="100%" height="100%" fill="${esc(S.bg)}"/>
 ${title}
-<g transform="translate(${r1(tx)} ${r1(ty)})">${gTerrain.innerHTML}${gLines.innerHTML}<g font-family='${FONT}'>${gLandmarks.innerHTML.replace(/<circle r="[^"]*" fill="transparent"\/>/g, '')}</g>${clean(gStations.innerHTML)}${gLabels.innerHTML}</g>
+<g transform="translate(${r1(tx)} ${r1(ty)})">${gTerrain.innerHTML}${gLines.innerHTML}${$('#gTransfers').innerHTML}<g font-family='${FONT}'>${gLandmarks.innerHTML.replace(/<circle r="[^"]*" fill="transparent"\/>/g, '')}</g>${clean(gStations.innerHTML)}${gLabels.innerHTML}</g>
 ${legend}
 </svg>`;
   }
